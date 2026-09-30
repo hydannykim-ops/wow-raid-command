@@ -1,0 +1,16 @@
+BNET_CLIENT_ID=
+
+BNET_CLIENT_SECRET=
+
+BNET_REDIRECT_URI=http://localhost:8788/api/auth/callback
+
+DEV_MOCK_LOGIN=1
+
+
+
+# Warcraft Logs API (https://www.warcraftlogs.com/api/clients/)
+
+WCL_CLIENT_ID=
+
+WCL_CLIENT_SECRET=
+

@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="ko" data-theme="horde">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WoW Raid Command</title>
+  <script>
+    try {
+      var t = localStorage.getItem("wow-raid-theme");
+      document.documentElement.setAttribute("data-theme", t === "alliance" ? "alliance" : "horde");
+    } catch (e) {
+      document.documentElement.setAttribute("data-theme", "horde");
+    }
+  </script>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="app is-home">
+    <header class="top">
+      <button type="button" class="brand" id="brandHome">
+        <span class="back-btn hidden" id="backHome" aria-hidden="true">←</span>
+        <span class="crest" aria-hidden="true"></span>
+        <span class="brand-copy">
+          <span class="eyebrow">RAID COMMAND CENTER</span>
+          <span class="title" data-i18n="homeTitle"></span>
+          <span class="patch" id="patch"></span>
+        </span>
+      </button>
+      <div class="top-utils">
+        <div class="settings-wrap">
+          <button type="button" class="settings-btn" id="settingsBtn" aria-expanded="false" aria-controls="settingsPanel" title="Settings">⚙</button>
+          <div id="settingsPanel" class="settings-panel hidden" role="dialog" aria-label="Settings">
+            <div class="settings-label" data-i18n="settingsLabel"></div>
+            <div class="settings-row">
+              <span data-i18n="langLabel"></span>
+              <button class="ghost" id="langBtn" type="button">EN</button>
+            </div>
+            <div class="settings-row">
+              <span data-i18n="factionLabel"></span>
+              <div class="faction-switch" role="group" aria-label="Faction theme">
+                <button type="button" class="faction-btn" data-theme-set="horde" id="themeHorde">호드</button>
+                <button type="button" class="faction-btn" data-theme-set="alliance" id="themeAlliance">얼라</button>
+              </div>
+            </div>
+            <div class="settings-row auth-row">
+              <div id="authBox" class="auth-box"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main id="homeView">
+      <section class="hub">
+        <p class="hub-lead" data-i18n="homeSub"></p>
+        <div class="hub-grid">
+          <button type="button" class="hub-card" data-view="helper">
+            <span class="hub-kicker">01</span>
+            <strong data-i18n="helperTab"></strong>
+            <span class="hub-desc" data-i18n="helperDesc"></span>
+            <span class="hub-go" data-i18n="enter"></span>
+          </button>
+          <button type="button" class="hub-card" data-view="planner">
+            <span class="hub-kicker">02</span>
+            <strong data-i18n="plannerTab"></strong>
+            <span class="hub-desc" data-i18n="plannerDesc"></span>
+            <span class="hub-go" data-i18n="enter"></span>
+          </button>
+          <button type="button" class="hub-card" data-view="game">
+            <span class="hub-kicker">03</span>
+            <strong data-i18n="gameTab"></strong>
+            <span class="hub-desc" data-i18n="gameDesc"></span>
+            <span class="hub-go" data-i18n="enter"></span>
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <main id="helperView" class="hidden">
+      <div class="layout">
+        <section class="panel">
+          <h2 data-i18n="specTitle"></h2>
+          <div class="sub" data-i18n="specSub"></div>
+          <div class="toolbar">
+            <input id="search" class="search" data-i18n-placeholder="search">
+            <button id="clear" class="ghost" data-i18n="clear"></button>
+            <div id="rosterCloud" class="roster-cloud hidden">
+              <select id="savedRosters"></select>
+              <button id="loadRoster" class="ghost" data-i18n="loadRoster"></button>
+              <button id="saveRoster" class="primary" data-i18n="saveRoster"></button>
+            </div>
+          </div>
+          <div id="filters" class="role-filter"></div>
+          <div id="specList" class="spec-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="raid-head">
+            <div>
+              <h2 data-i18n="raidTitle"></h2>
+              <div class="sub" data-i18n="raidSub"></div>
+            </div>
+            <div class="size">
+              <span data-i18n="size"></span>
+              <select id="raidSize">
+                <option>20</option>
+                <option>21</option>
+                <option>22</option>
+                <option>23</option>
+                <option>24</option>
+                <option>25</option>
+                <option>26</option>
+                <option>27</option>
+                <option>28</option>
+                <option>29</option>
+                <option>30</option>
+              </select>
+              <button id="aiRecBtn" class="primary" type="button" data-i18n="aiRecBtn"></button>
+              <button id="aiTestBtn" class="ghost" type="button" data-i18n="aiTestBtn"></button>
+            </div>
+          </div>
+          <div class="meter"><i id="meter"></i></div>
+          <div id="headcount" class="headcount"></div>
+          <div id="columns" class="columns"></div>
+          <div id="statusBox" class="ai-rec-box hidden"></div>
+          <div class="counts" id="counts"></div>
+        </section>
+
+        <section class="panel" id="synPanel">
+          <h2 data-i18n="synTitle"></h2>
+          <div class="sub" data-i18n="synSub"></div>
+          <div id="synCompleteBanner" class="syn-complete-banner hidden" aria-live="polite"></div>
+          <div id="synergies"></div>
+          <div class="tip" data-i18n="synTip"></div>
+        </section>
+      </div>
+    </main>
+
+    <main id="plannerView" class="hidden">
+      <!-- RaidPlanner mounts here -->
+    </main>
+
+    <main id="gameView" class="hidden">
+      <!-- RaidGameUI mounts here -->
+    </main>
+
+    <div class="footer" data-i18n="footer"></div>
+  </div>
+
+  <div id="celebrateOverlay" class="celebrate-overlay hidden" aria-hidden="true">
+    <div class="celebrate-burst" id="celebrateBurst"></div>
+    <div class="celebrate-card">
+      <div class="celebrate-icon">⚔</div>
+      <div class="celebrate-title" id="celebrateTitle"></div>
+      <div class="celebrate-sub" id="celebrateSub"></div>
+    </div>
+  </div>
+
+  <script>
+    var whTooltips = { colorLinks: true, iconizeLinks: false, renameLinks: false };
+  </script>
+  <script src="https://wow.zamimg.com/js/tooltips.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/game-balance.js"></script>
+  <script src="js/game-engine.js"></script>
+  <script src="js/game-fx.js"></script>
+  <script src="js/game-ui.js"></script>
+  <script src="js/planner-catalog.js"></script>
+  <script src="js/wcl-client.js"></script>
+  <script src="js/board-assets.js"></script>
+  <script src="js/planner.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/theme.js"></script>
+</body>
+</html>

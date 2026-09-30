@@ -1,0 +1,10 @@
+{
+  "name": "wow-raid-command",
+  "private": true,
+  "scripts": {
+    "dev": "npx --yes wrangler@4 pages dev .",
+    "db:create": "npx --yes wrangler@4 d1 create wow-raid",
+    "db:migrate:local": "npx --yes wrangler@4 d1 migrations apply wow-raid --local",
+    "db:migrate": "npx --yes wrangler@4 d1 migrations apply wow-raid --remote"
+  }
+}

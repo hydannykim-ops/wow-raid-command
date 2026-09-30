@@ -1,0 +1,12 @@
+name = "wow-raid-command"
+compatibility_date = "2026-09-16"
+pages_build_output_dir = "."
+
+# D1: Cloudflare Pages/Workers에 붙는 SQLite.
+# 원격 DB를 만들면 database_id를 그 UUID로 바꾸세요.
+#   npx wrangler d1 create wow-raid
+[[d1_databases]]
+binding = "DB"
+database_name = "wow-raid"
+database_id = "00000000-0000-0000-0000-000000000001"
+preview_database_id = "DB"
