@@ -1,4 +1,4 @@
-import { authStatus, createSession, upsertUser } from "../../_lib/auth.js";
+import { PREVIEW_USER, authStatus, createSession, upsertUser } from "../../_lib/auth.js";
 import { json, sessionCookie } from "../../_lib/http.js";
 
 export async function onRequestPost(context) {
@@ -6,14 +6,11 @@ export async function onRequestPost(context) {
   if (authStatus(env).mockLogin !== true) {
     return json({ error: "mock_disabled" }, 403);
   }
-  const user = {
-    id: "local-dev",
-    battletag: "LocalDev#0000",
-  };
+  const user = { ...PREVIEW_USER };
   await upsertUser(env.DB, user);
   const sessionId = await createSession(env.DB, user.id);
   return json(
-    { user },
+    { user, preview: true },
     200,
     { "set-cookie": sessionCookie(sessionId, request) }
   );

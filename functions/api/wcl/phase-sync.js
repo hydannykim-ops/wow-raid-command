@@ -1,4 +1,5 @@
 import { json } from "../../_lib/http.js";
+import { cacheHeaders, readWclCache, wclCacheKey, writeWclCache } from "../../_lib/wcl-cache.js";
 import { wclConfigured, wclGraphql } from "../../_lib/wcl.js";
 
 /**
@@ -16,6 +17,10 @@ export async function onRequestGet(context) {
   const difficulty = Number(url.searchParams.get("difficulty") || 5);
   const count = Math.min(15, Math.max(3, Number(url.searchParams.get("count") || 10)));
   if (!encounterId) return json({ ok: false, error: "encounterId 가 필요합니다." }, 400);
+
+  const cacheKey = wclCacheKey(["phase-sync", encounterId, difficulty, count]);
+  const cached = await readWclCache(env, request, cacheKey);
+  if (cached) return json(cached, 200, cacheHeaders(true));
 
   const rankQuery = `
     query($e: Int!, $d: Int, $p: Int) {
@@ -105,14 +110,17 @@ export async function onRequestGet(context) {
     const topKeys = new Set(top.map((t) => `${t.code}:${t.fightId}`));
     const bottom = (await collect(bottomList.filter((r) => !topKeys.has(`${r.report?.code}:${r.report?.fightID}`))));
 
-    return json({
+    const payload = {
       ok: true,
       encounterId,
       encounterName: first.name,
       difficulty,
       top,
       bottom,
-    });
+      cached: false,
+    };
+    await writeWclCache(env, cacheKey, "phase-sync", payload);
+    return json(payload, 200, cacheHeaders(false));
   } catch (err) {
     return json({ ok: false, error: String(err.message || err) }, 502);
   }

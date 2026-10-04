@@ -28,6 +28,17 @@
 
   const CDN = "https://wow.zamimg.com/images/wow/icons/large/";
   const BOSS_CDN = "https://wow.zamimg.com/images/wow/journal/";
+  // 모험 안내서(EJ) 보스 초상화를 로컬에 저장한 보스 id
+  const LOCAL_BOSS_PORTRAITS = new Set([
+    "nekzali",
+    "entombed-sentinels",
+    "lost-explorers",
+    "vashnik",
+    "sszorak",
+    "twin-fangs",
+    "coiled-altar",
+    "ulatek",
+  ]);
 
   function icon(name) {
     if (!name) return null;
@@ -1277,6 +1288,7 @@
     },
     getBossIcon(boss) {
       if (!boss) return null;
+      if (boss.id && LOCAL_BOSS_PORTRAITS.has(boss.id)) return `assets/bosses/portraits/${boss.id}.png`;
       if (boss.iconUrl) return boss.iconUrl;
       if (boss.icon) return bossIcon(boss.icon);
       return null;

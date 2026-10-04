@@ -642,7 +642,34 @@
     };
   }
 
-  function createRaid(id, name, nameKo, isPlayer, reputation) {
+  /** AI 명성: min~max 균등 간격(높은 순) + 소폭 흔들림 → 페르소나 매칭 후 공대 번호에 무작위 배정 */
+  function buildAiProfiles(n) {
+    const R = B.recruit;
+    const min = R.aiRep?.min ?? 40;
+    const max = R.aiRep?.max ?? 95;
+    const jitter = R.aiRep?.jitter ?? 2;
+    const order = R.aiPersonaByRank || [];
+    const usedNames = new Set();
+    const profiles = Array.from({ length: n }, (_, k) => {
+      const base = n > 1 ? max - ((max - min) * k) / (n - 1) : (min + max) / 2;
+      const reputation = Math.round(clamp(base + rnd(-jitter, jitter), 1, 100));
+      const personaId = order.length ? order[Math.min(order.length - 1, Math.floor((k / n) * order.length))] : null;
+      const free = (R.aiPersonas?.[personaId]?.guilds || []).filter((g) => !usedNames.has(g.ko));
+      const guild = free.length ? pick(free) : null;
+      if (guild) usedNames.add(guild.ko);
+      return { reputation, personaId, guild };
+    });
+    for (let i = profiles.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [profiles[i], profiles[j]] = [profiles[j], profiles[i]];
+    }
+    return profiles;
+  }
+
+  function createRaid(id, name, nameKo, isPlayer, reputation, personaId) {
+    const persona = !isPlayer && personaId ? B.recruit.aiPersonas?.[personaId] : null;
+    const greedR = persona?.greed || [B.recruit.aiGreed?.min ?? 0.35, B.recruit.aiGreed?.max ?? 0.85];
+    const speedR = persona?.speed || [B.recruit.aiSpeed?.min ?? 0.4, B.recruit.aiSpeed?.max ?? 1.0];
     return {
       id,
       name,
@@ -659,8 +686,12 @@
       killOrder: null,
       combat: null,
       logs: [],
-      aiGreed: rnd(B.recruit.aiGreed?.min ?? 0.35, B.recruit.aiGreed?.max ?? 0.85),
-      aiSpeed: rnd(B.recruit.aiSpeed?.min ?? 0.4, B.recruit.aiSpeed?.max ?? 1.0),
+      aiGreed: rnd(greedR[0], greedR[1]),
+      aiSpeed: rnd(speedR[0], speedR[1]),
+      aiPersona: persona ? personaId : null,
+      aiWeights: persona?.weights || null,
+      aiProcMax: persona?.procMax ?? 2,
+      aiRetryMult: persona?.retryMult ?? 1,
       battleRezMode: isPlayer ? "auto_tank_heal" : "auto_tank_heal",
     };
   }
@@ -766,14 +797,45 @@
     return true;
   }
 
-  function scoreApplicant(c, boss) {
-    const phase1 = getProficiency(c, boss.id, 1);
-    const w = B.recruit.scoreWeights || {};
+  /** 풀 생성 범위에서 나온 스탯 평균 — 가중치가 달라도 평균 점수가 같아지도록 보정용 */
+  function poolStatMeans() {
+    const perf = B.pool.performance || {};
+    const surv = B.pool.survival || {};
+    const sp = B.pool.startProficiency || {};
+    const vet = sp.veteran || { min: 5, max: 45 };
+    const rook = sp.rookie || { min: 0, max: 20 };
+    const vc = sp.veteranChance ?? 0.25;
+    return {
+      perf: ((perf.min ?? 35) + (perf.max ?? 98)) / 2,
+      surv: ((surv.min ?? 30) + (surv.max ?? 97)) / 2,
+      prof: vc * ((vet.min + vet.max) / 2) + (1 - vc) * ((rook.min + rook.max) / 2),
+      pot: 50,
+    };
+  }
+
+  function weightedStatScore(stats, w) {
     return (
-      c.performanceScore * (w.perf ?? 0.45) +
-      c.survivalScore * (w.surv ?? 0.35) +
-      phase1 * (w.prof ?? 0.2)
+      stats.perf * (w.perf ?? 0) +
+      stats.surv * (w.surv ?? 0) +
+      stats.prof * (w.prof ?? 0) +
+      stats.pot * (w.pot ?? 0)
     );
+  }
+
+  function scoreApplicant(c, boss, weights) {
+    const base = B.recruit.scoreWeights || { perf: 0.45, surv: 0.35, prof: 0.2 };
+    const w = weights || base;
+    const stats = {
+      perf: c.performanceScore,
+      surv: c.survivalScore,
+      prof: getProficiency(c, boss.id, 1),
+      pot: clamp(((c.potential ?? 1) - 1) * 100, 0, 100),
+    };
+    const raw = weightedStatScore(stats, w);
+    if (!weights) return raw;
+    const means = poolStatMeans();
+    const scale = weightedStatScore(means, base) / Math.max(1, weightedStatScore(means, w));
+    return raw * scale;
   }
 
   /**
@@ -846,11 +908,7 @@
     pushLog(raid, `Try #${raid.tries} — ${boss.nameKo || boss.name} 시작`);
     emitCombatEvent(raid, "pull", { bossId: boss.id });
     if (activeSyn.length) {
-      pushLog(
-        raid,
-        `시너지 ×${activeSyn.length} · 받피×${buffs.drMult.toFixed(3)} · AD×${buffs.atkAd.toFixed(3)} · AP×${buffs.atkAp.toFixed(3)}`,
-        "ok"
-      );
+      pushLog(raid, `시너지 ${activeSyn.length}개 활성`, "ok");
     }
     return raid.combat;
   }
@@ -1087,11 +1145,7 @@
     }
     if (cbt.t > cbt.enrage && !cbt.enraged) {
       cbt.enraged = true;
-      pushLog(
-        raid,
-        `광폭화! 보스 공격력 ×${ENRAGE_DMG_MULT}`,
-        "bad"
-      );
+      pushLog(raid, "광폭화! 보스가 격노합니다", "bad");
       emitCombatEvent(raid, "enrage", {});
     }
 
@@ -1353,14 +1407,14 @@
         if (applyUnitDamage(m, baseHit * doubleMult, "double", t, drMult, raid)) {
           cbt.deadCount += 1;
           deaths += 1;
-          pushLog(raid, `${m.name} 2배 피격으로 사망 (HP 0)`, "bad");
+          pushLog(raid, `${m.name} 2배 피격으로 사망`, "bad");
         }
         doubles += 1;
       } else {
         if (applyUnitDamage(m, baseHit, "hit", t, drMult, raid)) {
           cbt.deadCount += 1;
           deaths += 1;
-          pushLog(raid, `${m.name} 피격으로 사망 (HP 0)`, "bad");
+          pushLog(raid, `${m.name} 피격으로 사망`, "bad");
         }
       }
     });
@@ -1572,14 +1626,14 @@
       globalClock < slowUntil ? R.aiSlowGate ?? 0.28 : globalClock < midUntil ? R.aiMidGate ?? 0.55 : 1;
     if (Math.random() > slowGate) return;
 
-    const n = globalClock < slowUntil ? (Math.random() < 0.55 ? 1 : 0) : rndInt(0, 2);
+    const n = globalClock < slowUntil ? (Math.random() < 0.55 ? 1 : 0) : rndInt(0, raid.aiProcMax ?? 2);
     for (let i = 0; i < n && raid.applicants.length; i++) {
       const c = raid.applicants[0];
       if (!needsRole(raid, c.role)) {
         rejectCandidate(raid, c);
         continue;
       }
-      const score = scoreApplicant(c, boss);
+      const score = scoreApplicant(c, boss, raid.aiWeights);
       const threshold = (R.aiScoreBase ?? 42) + raid.aiGreed * (R.aiScoreGreed ?? 35);
       const filled = raid.members.length / RAID_SIZE;
       const bar = threshold * (0.55 + 0.45 * filled) - raid.aiSpeed * 8;
@@ -1624,13 +1678,15 @@
       true,
       opts.playerReputation ?? B.recruit.playerRepDefault ?? 86
     );
-    this.ai = Array.from({ length: AI_COUNT }, (_, i) =>
+    const aiProfiles = buildAiProfiles(AI_COUNT);
+    this.ai = aiProfiles.map((prof, i) =>
       createRaid(
         `ai_${i + 1}`,
-        `AI Raid ${i + 1}`,
-        `AI 공대 ${i + 1}`,
+        prof.guild?.en || `AI Raid ${i + 1}`,
+        prof.guild?.ko || `AI 공대 ${i + 1}`,
         false,
-        rnd(B.recruit.aiRep?.min ?? 48, B.recruit.aiRep?.max ?? 88)
+        prof.reputation,
+        prof.personaId
       )
     );
     this.raids = [this.player, ...this.ai];
@@ -1725,7 +1781,11 @@
     this.ai.forEach((r) => {
       if (r.state === "ready" && isFull(r)) {
         startCombat(r, this.boss, this.combatSpeed);
-      } else if (r.state === "dead" && isFull(r) && Math.random() < (B.recruit.aiRetryChance ?? 0.4) * r.aiSpeed) {
+      } else if (
+        r.state === "dead" &&
+        isFull(r) &&
+        Math.random() < (B.recruit.aiRetryChance ?? 0.4) * r.aiSpeed * (r.aiRetryMult ?? 1)
+      ) {
         startCombat(r, this.boss, this.combatSpeed);
       }
     });
@@ -1805,7 +1865,10 @@
       .map((r) => ({
         id: r.id,
         name: r.nameKo || r.name,
+        nameEn: r.name,
         isPlayer: r.isPlayer,
+        reputation: r.reputation,
+        persona: r.aiPersona,
         tries: r.tries,
         bestPct: r.bestPct,
         state: r.state,

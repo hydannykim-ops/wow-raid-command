@@ -1,4 +1,5 @@
 import { json } from "../../_lib/http.js";
+import { cacheHeaders, readWclCache, wclCacheKey, writeWclCache } from "../../_lib/wcl-cache.js";
 import { wclConfigured, wclGraphql } from "../../_lib/wcl.js";
 
 /**
@@ -12,6 +13,10 @@ export async function onRequestGet(context) {
   }
   const zoneId = Number(new URL(request.url).searchParams.get("zoneId") || 0);
   if (!zoneId) return json({ ok: false, error: "zoneId required" }, 400);
+
+  const cacheKey = wclCacheKey(["zone", zoneId]);
+  const cached = await readWclCache(env, request, cacheKey);
+  if (cached) return json(cached, 200, cacheHeaders(true));
 
   const query = `
     query ZoneEncounters($zoneID: Int!) {
@@ -30,8 +35,9 @@ export async function onRequestGet(context) {
   try {
     const data = await wclGraphql(env, query, { zoneID: zoneId });
     const zone = data?.worldData?.zone;
-    return json({
+    const payload = {
       ok: true,
+      cached: false,
       zone: zone
         ? {
             id: zone.id,
@@ -39,7 +45,9 @@ export async function onRequestGet(context) {
             encounters: (zone.encounters || []).map((e) => ({ id: e.id, name: e.name })),
           }
         : null,
-    });
+    };
+    await writeWclCache(env, cacheKey, "zone", payload);
+    return json(payload, 200, cacheHeaders(false));
   } catch (err) {
     return json({ ok: false, error: String(err.message || err) }, 502);
   }

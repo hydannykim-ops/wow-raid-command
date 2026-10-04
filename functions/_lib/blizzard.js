@@ -49,3 +49,53 @@ export async function fetchUserInfo(accessToken) {
   if (!id) throw new Error("userinfo missing account id");
   return { id, battletag };
 }
+
+const WOW_REGIONS = [
+  { id: "kr", host: "kr.api.blizzard.com", ns: "profile-kr", locale: "ko_KR" },
+  { id: "us", host: "us.api.blizzard.com", ns: "profile-us", locale: "en_US" },
+  { id: "eu", host: "eu.api.blizzard.com", ns: "profile-eu", locale: "en_GB" },
+  { id: "tw", host: "tw.api.blizzard.com", ns: "profile-tw", locale: "zh_TW" },
+];
+
+export async function fetchWowCharacters(accessToken) {
+  const out = [];
+  let unauthorized = false;
+  for (const region of WOW_REGIONS) {
+    const url = new URL(`https://${region.host}/profile/user/wow`);
+    url.searchParams.set("namespace", region.ns);
+    url.searchParams.set("locale", region.locale);
+    const res = await fetch(url.toString(), {
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    if (res.status === 401 || res.status === 403) {
+      unauthorized = true;
+      continue;
+    }
+    if (!res.ok) continue;
+    const data = await res.json().catch(() => ({}));
+    for (const account of data.wow_accounts || []) {
+      for (const ch of account.characters || []) {
+        out.push({
+          id: String(ch.id || `${region.id}-${ch.name}`),
+          name: ch.name || "",
+          realm: (ch.realm && ch.realm.name) || "",
+          realmSlug: (ch.realm && ch.realm.slug) || "",
+          region: region.id,
+          level: Number(ch.level) || 0,
+          className: (ch.playable_class && ch.playable_class.name) || "",
+          faction: (ch.faction && (ch.faction.type || ch.faction.name)) || "",
+        });
+      }
+    }
+  }
+  if (!out.length && unauthorized) {
+    const err = new Error("reauth");
+    err.code = "reauth";
+    throw err;
+  }
+  const max = out.reduce((m, c) => Math.max(m, c.level), 0);
+  const floor = max >= 70 ? max : 0;
+  return out
+    .filter((c) => c.name && c.level >= floor)
+    .sort((a, b) => b.level - a.level || a.name.localeCompare(b.name, "ko"));
+}

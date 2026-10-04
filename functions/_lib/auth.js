@@ -2,6 +2,16 @@ import { readSessionId } from "./http.js";
 
 const SESSION_DAYS = 14;
 
+/** 실제 Battle.net 키가 없을 때 쓰는 고정 미리보기 계정. */
+export const PREVIEW_USER = {
+  id: "bnet-preview",
+  battletag: "RaidLead#1842",
+};
+
+export function isPreviewUser(user) {
+  return Boolean(user && user.id === PREVIEW_USER.id);
+}
+
 export async function upsertUser(db, { id, battletag }) {
   await db
     .prepare(
@@ -52,4 +62,32 @@ export function authStatus(env) {
     authConfigured: Boolean(env.BNET_CLIENT_ID && env.BNET_CLIENT_SECRET),
     mockLogin: env.DEV_MOCK_LOGIN === "1",
   };
+}
+
+export async function saveOAuthToken(db, userId, accessToken, expiresIn) {
+  if (!db || !userId || !accessToken) return;
+  const sec = Math.max(60, Number(expiresIn) || 86400);
+  await db
+    .prepare(
+      `INSERT INTO oauth_tokens (user_id, access_token, expires_at)
+       VALUES (?, ?, datetime('now', '+' || ? || ' seconds'))
+       ON CONFLICT(user_id) DO UPDATE SET
+         access_token = excluded.access_token,
+         expires_at = excluded.expires_at`
+    )
+    .bind(userId, accessToken, String(sec))
+    .run();
+}
+
+export async function getOAuthToken(db, userId) {
+  if (!db || !userId) return null;
+  const row = await db
+    .prepare(
+      `SELECT access_token
+       FROM oauth_tokens
+       WHERE user_id = ? AND expires_at > datetime('now')`
+    )
+    .bind(userId)
+    .first();
+  return row && row.access_token ? row.access_token : null;
 }

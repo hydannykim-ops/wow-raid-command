@@ -1,4 +1,7 @@
-const DATA = window.RAID_DATA;
+const DATA = window.RAID_DATA || { raid: { specs: [], synergies: [], roles: [] }, balance: {}, classes: {} };
+if (!window.RAID_DATA || !window.RAID_DATA.raid) {
+  console.error("레이드 데이터를 불러오지 못했습니다. 페이지를 새로고침해 주세요.");
+}
 const S = DATA.raid.specs;
 const SY = DATA.raid.synergies;
 const ROLES = DATA.raid.roles;
@@ -73,6 +76,9 @@ const T = {
     plannerTitle: "레이드 플래너",
     gameTab: "구인 Game",
     gameDesc: "인재풀과 AI 공대가 레이스하는 시뮬레이션입니다.",
+    plazaTab: "커뮤니티",
+    plazaDesc: "오그리마 광장을 걷고 게시판에 들어갑니다.",
+    plazaTitle: "커뮤니티",
     specTitle: "전문화 선택",
     specSub: "전문화를 클릭해 파티에 추가하거나 제거하세요.",
     specSubAi: "AI 추천이 열린 동안 전문화를 클릭하면 신청온 사람에 올라갑니다.",
@@ -86,7 +92,7 @@ const T = {
     synTip:
       "미활성 시너지에 필요한 직업이 강조됩니다. 활성 시너지는 충족 직업 색으로만 점등됩니다.",
     comingTitle: "구인 Game",
-    comingSub: "300명 인재풀과 AI 공대 10개가 레이스합니다.",
+    comingSub: "1000명 인재풀과 AI 공대 10개가 레이스합니다.",
     footer: "Cloudflare Pages + D1 · 한국어/English 전환",
     saveRoster: "클라우드 저장",
     loadRoster: "불러오기",
@@ -106,6 +112,9 @@ const T = {
     aiRecBtn: "AI 추천 리스트",
     aiRecClose: "닫기",
     aiTestBtn: "TEST 10명",
+    planRaidTitle: "공대가 가득 찼습니다",
+    planRaidSub: "이 조합으로 바로 레이드 플랜을 짤 수 있습니다.",
+    planRaidBtn: "이 파티로 레이드플랜 짜러가기",
   },
   en: {
     title: "WoW Raid Recruiting Helper",
@@ -122,7 +131,10 @@ const T = {
     plannerDesc: "Place cooldowns and orders on the timeline.",
     plannerTitle: "Raid Planner",
     gameTab: "Recruiting Game",
-    gameDesc: "Race AI raids with a pool of 300 candidates.",
+    gameDesc: "Race AI raids with a pool of 1000 candidates.",
+    plazaTab: "Community",
+    plazaDesc: "Walk the plaza and step into a board.",
+    plazaTitle: "Community",
     specTitle: "Choose Specialization",
     specSub: "Click a specialization to add or remove it from the raid.",
     specSubAi: "While the AI list is open, clicking a spec queues an applicant.",
@@ -136,7 +148,7 @@ const T = {
     synTip:
       "Inactive synergies highlight required classes. Active ones only tint with the covering class color.",
     comingTitle: "Recruiting Game",
-    comingSub: "Race 10 AI raids using a pool of 300 candidates.",
+    comingSub: "Race 10 AI raids using a pool of 1000 candidates.",
     footer: "Cloudflare Pages + D1 · KO/EN toggle",
     saveRoster: "Cloud save",
     loadRoster: "Load",
@@ -156,6 +168,9 @@ const T = {
     aiRecBtn: "AI Recommend List",
     aiRecClose: "Close",
     aiTestBtn: "TEST 10",
+    planRaidTitle: "The raid is full",
+    planRaidSub: "Take this roster into the raid planner.",
+    planRaidBtn: "Plan this raid",
   },
 };
 
@@ -510,17 +525,14 @@ function tankHealForceState(rem, covered) {
 }
 
 function forceTankHealAdvice(parts) {
-  const bits = parts.map((p) => {
-    const specName = forcedSpecPhrase(p.className, p.alts);
-    return tx(
-      `${displayClassName(p.className)}는 ${specName}`,
-      `${displayClassName(p.className)} as ${specName}`
-    );
-  });
-  const last = parts[parts.length - 1];
-  const lastSpec = forcedSpecPhrase(last.className, last.alts);
-  const who =
-    parts.length === 1 ? `${displayClassName(last.className)}는 ${lastSpec}` : bits.join(", ");
+  const who = parts
+    .map((p) => {
+      const specName = forcedSpecPhrase(p.className, p.alts);
+      return lang === "ko"
+        ? `${classChip(p.className)}는 ${specName}`
+        : `${classChip(p.className)} as ${specName}`;
+    })
+    .join(", ");
   return tx(
     `이 사람을 받으면 딜러 자리가 부족해서 ${who}로 받아가야 합니다.`,
     `If you take this player, not enough DPS slots would be left, so ${who} would have to come.`
@@ -596,14 +608,28 @@ function mustComeAsMsg(className, specKo, specEn, rem) {
 function forcedDpsSpecMsgs(rem, covered) {
   const msgs = [];
   if (rem.dpsLeft <= 0) return msgs;
-  if (rem.healLeft === 0 && !covered.has("Priest")) {
-    msgs.push(mustComeAsMsg("Priest", "암사", "Shadow", rem));
-  }
-  if (rem.healLeft === 0 && !covered.has("Evoker")) {
-    msgs.push(mustComeAsMsg("Evoker", "황폐나 증강", "Devastation / Augmentation", rem));
-  }
-  if (rem.tankLeft === 0 && rem.healLeft === 0 && !covered.has("Paladin")) {
-    msgs.push(mustComeAsMsg("Paladin", "징벌", "Retribution", rem));
+  if (rem.healLeft === 0) {
+    if (!covered.has("Priest")) msgs.push(mustComeAsMsg("Priest", "암사", "Shadow", rem));
+    if (!covered.has("Evoker")) {
+      msgs.push(mustComeAsMsg("Evoker", "황폐나 증강", "Devastation / Augmentation", rem));
+    }
+    if (!covered.has("Shaman")) {
+      msgs.push(mustComeAsMsg("Shaman", "정기나 고양", "Elemental / Enhancement", rem));
+    }
+    if (!covered.has("Druid")) {
+      msgs.push(
+        rem.tankLeft === 0
+          ? mustComeAsMsg("Druid", "야성이나 조화", "Feral / Balance", rem)
+          : mustComeAsMsg("Druid", "수호나 야성이나 조화", "Guardian / Feral / Balance", rem)
+      );
+    }
+    if (!covered.has("Paladin")) {
+      msgs.push(
+        rem.tankLeft === 0
+          ? mustComeAsMsg("Paladin", "징벌", "Retribution", rem)
+          : mustComeAsMsg("Paladin", "보호나 징벌", "Protection / Retribution", rem)
+      );
+    }
   }
   if (covered.has("Monk")) return msgs;
   if (rem.tankLeft === 0 && rem.healLeft === 0) {
@@ -1418,6 +1444,10 @@ function renderProviderRow(syn, isOn) {
 }
 
 let currentView = "home";
+let currentRoute = { view: "home" };
+const PLAZA_BOARDS = ["info", "recruit", "seek", "free"];
+const PLAZA_KINDS = ["regular", "pickup"];
+const PLAZA_INTENTS = ["recruit", "seek"];
 
 function applyI18n() {
   document.querySelectorAll("[data-i18n]").forEach((e) => {
@@ -1435,7 +1465,15 @@ function applyI18n() {
           ? tr("comingTitle")
           : currentView === "helper"
             ? tr("helperTab")
-            : tr("homeTitle");
+            : currentView === "plaza"
+              ? window.CommunityPlaza && typeof CommunityPlaza.pageTitle === "function"
+                ? CommunityPlaza.pageTitle(currentRoute)
+                : tr("plazaTitle")
+              : tr("homeTitle");
+  }
+  document.title = `${titleEl ? titleEl.textContent : tr("homeTitle")} · WoW Raid Command`;
+  if (currentView === "plaza" && window.CommunityPlaza && typeof CommunityPlaza.relabel === "function") {
+    CommunityPlaza.relabel();
   }
   $("langBtn").textContent = lang === "ko" ? "EN" : "한글";
   $("patch").textContent = DATA.raid.targetPatch;
@@ -1658,12 +1696,28 @@ function renderHeadcount() {
   }</div>`;
 }
 
+function renderPlanRaidBanner() {
+  const banner = $("planRaidBanner");
+  if (!banner) return;
+  const full = roster.length >= +$("raidSize").value;
+  banner.classList.toggle("hidden", !full);
+}
+
+function goPlanRaid() {
+  if (roster.length < +$("raidSize").value) return;
+  goToView("planner");
+  if (window.RaidPlanner && typeof RaidPlanner.importFromHelper === "function") {
+    RaidPlanner.importFromHelper();
+  }
+}
+
 function renderAll() {
   renderFilters();
   renderSpecs();
   renderColumns();
   renderSynergies();
   renderHeadcount();
+  renderPlanRaidBanner();
   renderAiAdvice();
   $("meter").style.width =
     Math.min(100, (roster.length / +$("raidSize").value) * 100) + "%";
@@ -1675,14 +1729,138 @@ function renderAll() {
   ).join("");
 }
 
-function goToView(view) {
-  currentView = view === "planner" || view === "game" || view === "helper" ? view : "home";
+const VIEW_PATH = {
+  home: "/",
+  helper: "/helper",
+  planner: "/planner",
+  game: "/game",
+  plaza: "/plaza",
+};
+
+function fileMode() {
+  return location.protocol === "file:";
+}
+
+function locationPath() {
+  if (fileMode()) {
+    const hash = String(location.hash || "").replace(/^#/, "");
+    return hash || "/";
+  }
+  return location.pathname;
+}
+
+function normalizePath(pathname) {
+  const raw = String(pathname || "/").replace(/\/index\.html$/i, "");
+  const clean = raw.replace(/\/+$/, "");
+  return clean || "/";
+}
+
+function parseAppPath(pathname) {
+  const parts = normalizePath(pathname).split("/").filter(Boolean);
+  const first = parts[0] || "";
+  if (first === "helper" || first === "planner" || first === "game") return { view: first };
+  if (first !== "plaza") return { view: "home" };
+  const a = parts[1] || "";
+  if (!a) return { view: "plaza", walk: true };
+  if (a === "walk") return { view: "plaza", walk: true };
+  if (a === "jobs") {
+    const intent = PLAZA_INTENTS.includes(parts[2]) ? parts[2] : "";
+    const kind = PLAZA_KINDS.includes(parts[3]) ? parts[3] : "";
+    if (!intent) return { view: "plaza", gate: "jobs" };
+    if (!kind) return { view: "plaza", gate: "jobs", intent };
+    const rest = parts[4] || "";
+    const route = { view: "plaza", board: intent, kind, mode: "list" };
+    if (rest === "write-pool") {
+      route.mode = "write";
+      route.writeAs = "pool";
+    } else if (rest === "write-raid" || rest === "write") {
+      route.mode = "write";
+      route.writeAs = rest === "write" && intent === "recruit" ? "pool" : "raid";
+    } else if (rest) {
+      route.mode = "read";
+      route.postId = decodeURIComponent(rest);
+    }
+    return route;
+  }
+  if (a === "info" || a === "free") {
+    const rest = parts[2] || "";
+    const route = { view: "plaza", board: a, mode: "list" };
+    if (rest === "write") route.mode = "write";
+    else if (rest) {
+      route.mode = "read";
+      route.postId = decodeURIComponent(rest);
+    }
+    return route;
+  }
+  if (PLAZA_BOARDS.includes(a)) return { view: "plaza", board: a, mode: "list" };
+  return { view: "plaza" };
+}
+
+function pathFromRoute(route) {
+  if (!route || route.view === "home") return "/";
+  if (route.view === "plaza") {
+    if (route.walk) return "/plaza";
+    if (route.board === "info" || route.board === "free") {
+      let path = "/plaza/" + route.board;
+      if (route.mode === "write") return path + "/write";
+      if (route.mode === "read" && route.postId) return path + "/" + encodeURIComponent(route.postId);
+      return path;
+    }
+    if (route.board === "recruit" || route.board === "seek") {
+      let path = "/plaza/jobs/" + route.board + "/" + (route.kind || "regular");
+      if (route.mode === "write") {
+        const as = route.writeAs || (route.board === "recruit" ? "pool" : "raid");
+        return path + (as === "pool" ? "/write-pool" : "/write-raid");
+      }
+      if (route.mode === "read" && route.postId) return path + "/" + encodeURIComponent(route.postId);
+      return path;
+    }
+    if (route.gate === "jobs") return route.intent ? "/plaza/jobs/" + route.intent : "/plaza/jobs";
+    return "/plaza";
+  }
+  return VIEW_PATH[route.view] || "/";
+}
+
+function goToView(view, opts) {
+  if (view && typeof view === "object") return goToRoute(view, opts);
+  if (view === "plaza") return goToRoute({ view: "plaza", walk: true }, opts);
+  return goToRoute({ view: view || "home" }, opts);
+}
+
+function goToRoute(route, opts) {
+  const options = opts || {};
+  currentRoute = {
+    view:
+      route.view === "planner" || route.view === "game" || route.view === "helper" || route.view === "plaza"
+        ? route.view
+        : "home",
+    board: route.view === "plaza" ? route.board || "" : "",
+    kind: route.kind || "",
+    gate: route.gate || "",
+    intent: route.intent || "",
+    walk: !!(route.walk || (route.view === "plaza" && !route.board && !route.gate)),
+    mode: route.mode || "",
+    writeAs: route.writeAs || "",
+    postId: route.postId || "",
+  };
+  currentView = currentRoute.view;
+  const onPlaza = currentView === "plaza";
+  const onWalk = onPlaza && currentRoute.walk;
+  const onBoard =
+    onPlaza &&
+    (currentRoute.board === "info" ||
+      currentRoute.board === "free" ||
+      ((currentRoute.board === "recruit" || currentRoute.board === "seek") && currentRoute.kind));
   $("homeView")?.classList.toggle("hidden", currentView !== "home");
   $("helperView").classList.toggle("hidden", currentView !== "helper");
   $("plannerView").classList.toggle("hidden", currentView !== "planner");
   $("gameView").classList.toggle("hidden", currentView !== "game");
+  $("communityView")?.classList.toggle("hidden", currentView !== "plaza");
   document.querySelector(".app")?.classList.toggle("is-home", currentView === "home");
   document.querySelector(".app")?.classList.toggle("rp-wide", currentView === "planner");
+  document.querySelector(".app")?.classList.toggle("plaza-hub-open", onPlaza && !onWalk && !onBoard);
+  document.querySelector(".app")?.classList.toggle("mw-open", onWalk);
+  document.querySelector(".app")?.classList.toggle("mw-board", !!onBoard);
   if (currentView !== "planner") document.querySelector(".app")?.classList.remove("rp-fit-board");
   $("backHome")?.classList.toggle("hidden", currentView === "home");
   applyI18n();
@@ -1695,13 +1873,42 @@ function goToView(view) {
       () => roster.slice()
     );
   }
+  if (currentView === "plaza" && window.CommunityPlaza) {
+    CommunityPlaza.mount(() => lang);
+    if (typeof CommunityPlaza.openRoute === "function") CommunityPlaza.openRoute(currentRoute);
+  } else if (window.CommunityPlaza) CommunityPlaza.pause();
+
+  const path = pathFromRoute(currentRoute);
+  if (!options.silent && normalizePath(locationPath()) !== path) {
+    const state = { ...currentRoute };
+    const url = fileMode() ? location.pathname + location.search + "#" + path : path;
+    if (options.replace) history.replaceState(state, "", url);
+    else history.pushState(state, "", url);
+  }
 }
 
-document.querySelectorAll("[data-view]").forEach((b) => {
-  b.onclick = () => goToView(b.dataset.view);
+window.RaidRouter = {
+  go(route, opts) {
+    goToRoute(route, opts);
+  },
+};
+
+document.querySelectorAll("[data-view]").forEach((el) => {
+  el.addEventListener("click", (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button === 1) return;
+    if (el.tagName === "A") e.preventDefault();
+    goToView(el.dataset.view);
+  });
 });
 $("brandHome")?.addEventListener("click", () => {
   if (currentView !== "home") goToView("home");
+});
+window.addEventListener("popstate", () => {
+  goToRoute(parseAppPath(locationPath()), { silent: true });
+});
+window.addEventListener("hashchange", () => {
+  if (!fileMode()) return;
+  goToRoute(parseAppPath(locationPath()), { silent: true });
 });
 
 $("langBtn").onclick = () => {
@@ -1748,10 +1955,11 @@ $("aiRecBtn").onclick = () => {
   if (aiRecOpen) $("statusBox")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 };
 $("aiTestBtn").onclick = () => fillRandomApplicants(10);
+$("planRaidBtn")?.addEventListener("click", goPlanRaid);
 $("clear").onclick = () => {
   roster = [];
   applicants = [];
   renderAll();
 };
 
-applyI18n();
+goToRoute(parseAppPath(locationPath()), { replace: true });

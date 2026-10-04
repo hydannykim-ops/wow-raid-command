@@ -1,4 +1,5 @@
 import { json } from "../../_lib/http.js";
+import { cacheHeaders, readWclCache, wclCacheKey, writeWclCache } from "../../_lib/wcl-cache.js";
 import { wclConfigured, wclGraphql } from "../../_lib/wcl.js";
 
 /**
@@ -24,7 +25,7 @@ export async function onRequestGet(context) {
   const specName = String(url.searchParams.get("specName") || "").trim();
   const metric = String(url.searchParams.get("metric") || "hps").trim().toLowerCase();
   const difficulty = Number(url.searchParams.get("difficulty") || 5);
-  const pageSize = Math.min(20, Math.max(1, Number(url.searchParams.get("pageSize") || 10)));
+  const pageSize = Math.min(10, Math.max(1, Number(url.searchParams.get("pageSize") || 10)));
   const page = Math.max(1, Number(url.searchParams.get("page") || 1));
   const partition = url.searchParams.get("partition");
   const serverRegion = url.searchParams.get("serverRegion") || undefined;
@@ -32,6 +33,21 @@ export async function onRequestGet(context) {
   if (!encounterId || !className || !specName) {
     return json({ ok: false, error: "encounterId, className, specName 이 필요합니다." }, 400);
   }
+
+  const cacheKey = wclCacheKey([
+    "rankings",
+    encounterId,
+    className,
+    specName,
+    metric,
+    difficulty,
+    page,
+    pageSize,
+    partition || "",
+    serverRegion || "",
+  ]);
+  const cached = await readWclCache(env, request, cacheKey);
+  if (cached) return json(cached, 200, cacheHeaders(true));
 
   const query = `
     query EncounterRankings(
@@ -108,7 +124,7 @@ export async function onRequestGet(context) {
       };
     });
 
-    return json({
+    const payload = {
       ok: true,
       configured: true,
       encounterId,
@@ -121,7 +137,10 @@ export async function onRequestGet(context) {
       pageSize,
       count: totalCount,
       rankings,
-    });
+      cached: false,
+    };
+    await writeWclCache(env, cacheKey, "rankings", payload);
+    return json(payload, 200, cacheHeaders(false));
   } catch (err) {
     return json({ ok: false, configured: true, error: String(err.message || err) }, 502);
   }

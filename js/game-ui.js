@@ -17,6 +17,7 @@
   let patchQueued = false;
   let lastPatchAt = 0;
   let inspectId = null;
+  let scoutId = null;
   let appRoleFilters = new Set(["Tank", "Heal", "Melee", "Ranged"]);
   const APP_FILTER_ROLES = ["Tank", "Heal", "Melee", "Ranged"];
   const fxDeathUntil = Object.create(null);
@@ -81,6 +82,7 @@
     lastScreen = null;
     shellBuilt = false;
     inspectId = null;
+    scoutId = null;
     appRoleFilters = new Set(APP_FILTER_ROLES);
     for (const k of Object.keys(fxDeathUntil)) delete fxDeathUntil[k];
     for (const k of Object.keys(fxRezUntil)) delete fxRezUntil[k];
@@ -157,6 +159,11 @@
     const root = document.getElementById("gameView");
     if (!root) return;
     root.addEventListener("click", (e) => {
+      if (e.target.id === "gScoutModal") {
+        scoutId = null;
+        patch(true);
+        return;
+      }
       const filt = e.target.closest("[data-g-filter]");
       if (filt) {
         e.preventDefault();
@@ -174,6 +181,12 @@
       if (!btn || btn.disabled) return;
       e.preventDefault();
       handleAction(btn.dataset.gAct, btn.dataset.id);
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && scoutId) {
+        scoutId = null;
+        patch(true);
+      }
     });
     root.addEventListener("dragstart", (e) => {
       const slot = e.target.closest("[data-drag-id]");
@@ -315,6 +328,12 @@
       case "close-inspect":
         inspectId = null;
         break;
+      case "scout":
+        scoutId = scoutId === id ? null : id;
+        break;
+      case "close-scout":
+        scoutId = null;
+        break;
     }
     patch(true);
   }
@@ -379,6 +398,13 @@
           <h2>${t("이적 시장", "Transfer market")}</h2>
           <div class="g-transfer-list" id="gTransferList"></div>
           <div class="actions"><button class="ghost" data-g-act="close-transfer">${t("닫기", "Close")}</button></div>
+        </div>
+      </div>
+      <div class="g-modal-bg" id="gScoutModal" hidden>
+        <div class="g-modal g-scout-modal">
+          <div id="gScoutHead"></div>
+          <div id="gScoutBody" class="g-scout-body"></div>
+          <div class="actions"><button class="ghost" data-g-act="close-scout">${t("닫기", "Close")}</button></div>
         </div>
       </div>
     `;
@@ -544,7 +570,7 @@
     // Toolbar (never rebuild select)
     const clock = $("#gClockLine");
     if (clock) {
-      clock.innerHTML = `${t("인재풀", "Pool")} 300 · AI 10 · ${t("시계", "Clock")} ${math().formatTime(eng.clock)}${
+      clock.innerHTML = `${t("인재풀", "Pool")} ${C().POOL_SIZE ?? 1000} · AI ${C().AI_COUNT ?? 10} · ${t("시계", "Clock")} ${math().formatTime(eng.clock)}${
         paused ? ` · <span class="g-paused-tag">${t("일시정지", "Paused")}</span>` : ""
       }`;
     }
@@ -610,6 +636,11 @@
     if (tr) {
       tr.hidden = !showTransfer;
       if (showTransfer) patchTransfer(p, boss);
+    }
+    const sc = $("#gScoutModal");
+    if (sc) {
+      sc.hidden = !scoutId;
+      if (scoutId) patchScout(eng);
     }
   }
 
@@ -740,12 +771,8 @@
             <div class="g-res-mvp-tag">MVP</div>
             <div class="g-res-mvp-name">${resultPersonLabel(mvp)}</div>
             <div class="g-res-mvp-sub">${t(
-              `${(mvp.portions ?? 0).toFixed(2)}인분 · 가피 ${fmtNum(mvp.avoidableTaken || 0)} (청결 ${(
-                (mvp.cleanPart ?? 0) * 100
-              ).toFixed(0)}%)`,
-              `${(mvp.portions ?? 0).toFixed(2)} share · avoidable ${fmtNum(mvp.avoidableTaken || 0)} (clean ${(
-                (mvp.cleanPart ?? 0) * 100
-              ).toFixed(0)}%)`
+              `${(mvp.portions ?? 0).toFixed(2)}인분 · 피할 수 있는 피해 ${fmtNum(mvp.avoidableTaken || 0)}`,
+              `${(mvp.portions ?? 0).toFixed(2)} share · avoidable damage ${fmtNum(mvp.avoidableTaken || 0)}`
             )}</div>
           </div>`
         : ""
@@ -802,7 +829,7 @@
           <div class="g-res-list">${resultRankRows(summary.hpsRank, maxH, { withRate: true, withOh: true, withPortions: true, withTankHeal: true })}</div>
         </div>
         <div class="g-res-col scroll">
-          <h4>${t("가피 (즉사·2배초과)", "Avoidable DT")}</h4>
+          <h4>${t("피할 수 있는 피해", "Avoidable damage")}</h4>
           <div class="g-res-list">${resultRankRows(summary.dtRank, maxT)}</div>
         </div>
       </div>
@@ -822,8 +849,6 @@
     box.dataset.key = key;
     const hp = math().getBossHp(boss);
     const en = math().getBossEnrage(boss);
-    const match = window.RAID_GAME_BALANCE?.bossBonus?.match ?? 1.15;
-    const allR = window.RAID_GAME_BALANCE?.bossBonus?.allRounder ?? 1.05;
     const phases = (boss.phases || [])
       .map((p) => {
         const skills = math().getPhaseSkills(p);
@@ -833,11 +858,11 @@
       .join("  |  ");
     box.innerHTML = `<div><b>${langRef() === "ko" ? boss.nameKo : boss.name}</b> · ${t("타입", "Type")} ${targetTypeLabel(
       boss.targetType
-    )} · ${t("체력", "HP")} ${fmtNum(hp)} · ${t("광폭화", "Enrage")} ${math().formatTime(en)} ×${C().ENRAGE_DMG_MULT ?? 5}</div>
+    )} · ${t("체력", "HP")} ${fmtNum(hp)} · ${t("광폭화", "Enrage")} ${math().formatTime(en)}</div>
       <div class="g-boss-skills">${phases}</div>
       <div class="g-boss-bonus">${t(
-        `딜러 특성 보너스: 타입 일치 ×${match} · 만능 ×${allR}`,
-        `DPS specialty: match ×${match} · all-rounder ×${allR}`
+        "보스 타입과 특성이 맞는 딜러는 더 강해집니다",
+        "Dealers whose specialty matches the boss type hit harder"
       )}</div>`;
   }
 
@@ -1152,10 +1177,7 @@
         .join("");
     }
     if (summary) {
-      summary.innerHTML = `<span>${t("활성", "Active")} <b>${activeN}/${list.length}</b></span>
-        <span>AD ×<b>${buffs.atkAd.toFixed(3)}</b></span>
-        <span>AP ×<b>${buffs.atkAp.toFixed(3)}</b></span>
-        <span>${t("받피", "DT")} ×<b>${buffs.drMult.toFixed(3)}</b></span>`;
+      summary.innerHTML = `<span>${t("활성", "Active")} <b>${activeN}/${list.length}</b></span>`;
     }
     if (banner) {
       const done = list.length > 0 && activeN === list.length;
@@ -1180,31 +1202,286 @@
     );
   }
 
+  function personaInfo(id) {
+    const p = id ? window.RAID_GAME_BALANCE?.recruit?.aiPersonas?.[id] : null;
+    if (!p) return null;
+    return {
+      label: langRef() === "ko" ? p.nameKo || p.name : p.name || p.nameKo,
+      desc: langRef() === "ko" ? p.descKo || p.desc || "" : p.desc || p.descKo || "",
+    };
+  }
+
+  function raidDisplayName(r) {
+    return langRef() === "ko" ? r.nameKo || r.name : r.name || r.nameKo;
+  }
+
+  function bestPctText(killed, tries, bestPct) {
+    return killed ? "Kill" : tries > 0 ? `${bestPct.toFixed(1)}%` : "—";
+  }
+
+  // 행 노드를 공대별로 유지해야 갱신 중에도 클릭이 씹히지 않는다
   function patchWcl(box, eng) {
     if (!box) return;
     const rows = eng.standings();
-    box.innerHTML = `<div class="wcl-table">
-      <div class="wcl-row wcl-head-row">
-        <span>#</span><span>${t("공대", "Raid")}</span><span>${t("진행도", "Progress")}</span><span>${t("풀", "Pulls")}</span><span>${t("베스트", "Best")}</span>
+    let table = box.querySelector(".wcl-table");
+    if (!table || table.dataset.lang !== langRef()) {
+      box.innerHTML = `<div class="wcl-table" data-lang="${langRef()}">
+        <div class="wcl-row wcl-head-row">
+          <span>#</span><span>${t("공대", "Raid")}</span><span>${t("진행도", "Progress")}</span><span>${t("풀", "Pulls")}</span><span>${t("베스트", "Best")}</span>
+        </div>
+      </div>`;
+      table = box.querySelector(".wcl-table");
+    }
+    rows.forEach((s, i) => {
+      let row = table.querySelector(`.wcl-row[data-raid="${s.id}"]`);
+      if (!row) {
+        row = document.createElement("div");
+        row.className = "wcl-row";
+        row.dataset.raid = s.id;
+        row.dataset.gAct = "scout";
+        row.dataset.id = s.id;
+        row.innerHTML = `<span class="wcl-rank"></span>
+          <span class="wcl-name"><span class="wcl-name-text"></span><small class="wcl-tag"></small></span>
+          <span class="wcl-prog"><div class="wcl-prog-bar"><i></i></div><em></em></span>
+          <span class="wcl-pulls"></span>
+          <span class="wcl-best" title="${t("최저 보스 HP", "Lowest boss HP")}"></span>`;
+      }
+      const slot = table.children[i + 1] || null;
+      if (slot !== row) table.insertBefore(row, slot);
+
+      const killed = s.killOrder != null;
+      const fighting = s.state === "fighting" && !killed;
+      const progress = killed ? 100 : Math.max(0, 100 - (fighting ? s.hpPct : s.bestPct));
+      const name = langRef() === "ko" ? s.name : s.nameEn || s.name;
+      const persona = personaInfo(s.persona);
+      const repBit = s.reputation != null ? `${t("명성", "Rep")} ${Math.round(s.reputation)}` : "";
+      const tagText = s.isPlayer ? repBit : [persona?.label, repBit].filter(Boolean).join(" · ");
+
+      row.classList.toggle("you", !!s.isPlayer);
+      row.classList.toggle("killed", killed);
+      row.classList.toggle("live", fighting);
+      row.classList.toggle("scouted", scoutId === s.id);
+      row.title = `${persona?.desc ? `${persona.desc} · ` : ""}${t("클릭해서 공대 살펴보기", "Click to scout this raid")}`;
+      setText(row.querySelector(".wcl-rank"), String(killed ? s.killOrder : i + 1));
+      setText(row.querySelector(".wcl-name-text"), `${name}${s.isPlayer ? t(" (나)", " (You)") : ""}`);
+      const tag = row.querySelector(".wcl-tag");
+      setText(tag, tagText);
+      tag.hidden = !tagText;
+      const bar = row.querySelector(".wcl-prog-bar i");
+      const w = `${progress}%`;
+      if (bar.style.width !== w) bar.style.width = w;
+      setText(row.querySelector(".wcl-prog em"), killed ? "Kill" : `${progress.toFixed(1)}%`);
+      setText(row.querySelector(".wcl-pulls"), String(s.tries));
+      setText(row.querySelector(".wcl-best"), bestPctText(killed, s.tries, s.bestPct));
+    });
+  }
+
+  function setText(el, text) {
+    if (el && el.textContent !== text) el.textContent = text;
+  }
+
+  function avgOf(list, fn) {
+    if (!list.length) return 0;
+    return list.reduce((s, x) => s + fn(x), 0) / list.length;
+  }
+
+  function avgBossProficiency(m, boss) {
+    const phases = boss.phases || [];
+    if (!phases.length) return 0;
+    return avgOf(phases, (ph) => math().getProficiency(m, boss.id, ph.phase));
+  }
+
+  function patchScout(eng) {
+    const modal = $("#gScoutModal");
+    const head = $("#gScoutHead");
+    const body = $("#gScoutBody");
+    const r = eng.raids.find((x) => x.id === scoutId);
+    if (!r || !head || !body) {
+      scoutId = null;
+      if (modal) modal.hidden = true;
+      return;
+    }
+    const boss = eng.boss;
+    const c = r.combat;
+    const fighting = r.state === "fighting" && c && !c.finished;
+    const persona = personaInfo(r.aiPersona);
+    const killed = r.killOrder != null;
+    const rank = eng.standings().findIndex((s) => s.id === r.id) + 1;
+
+    const headHtml = `<div class="g-scout-title">
+        <div>
+          <div class="g-wcl-kicker">${t("공대 살펴보기", "Raid scout")}</div>
+          <h2>${raidDisplayName(r)}${r.isPlayer ? t(" (나)", " (You)") : ""}</h2>
+          <div class="sub">${
+            persona ? `${persona.label} · ${persona.desc}` : r.isPlayer ? t("플레이어 공대", "Your raid") : ""
+          }</div>
+        </div>
+        <span class="g-scout-state st-${r.state}">${stateLabel(r.state)}</span>
       </div>
-      ${rows
-        .map((s, i) => {
-          const fighting = s.state === "fighting";
-          const remain = fighting ? s.hpPct : s.bestPct;
-          const progress = s.killOrder != null ? 100 : Math.max(0, 100 - remain);
-          const rank = s.killOrder != null ? s.killOrder : i + 1;
-          return `<div class="wcl-row ${s.isPlayer ? "you" : ""} ${s.killOrder != null ? "killed" : ""}">
-            <span class="wcl-rank">${rank}</span>
-            <span class="wcl-name">${s.name}${s.isPlayer ? t(" (나)", " (You)") : ""}</span>
-            <span class="wcl-prog"><div class="wcl-prog-bar"><i style="width:${progress}%"></i></div><em>${
-              s.killOrder != null ? "Kill" : `${progress.toFixed(1)}%`
-            }</em></span>
-            <span class="wcl-pulls">${s.tries}</span>
-            <span class="wcl-best">${s.killOrder != null ? "0.0%" : `${remain.toFixed(1)}%`}</span>
-          </div>`;
-        })
-        .join("")}
-    </div>`;
+      <div class="g-scout-stats">
+        <div><span>${t("순위", "Rank")}</span><b>${
+          killed ? t(`${r.killOrder}번째 처치`, `Kill #${r.killOrder}`) : `#${rank}`
+        }</b></div>
+        <div><span>${t("명성", "Reputation")}</span><b>${Math.round(r.reputation)}</b></div>
+        <div><span>${t("풀 수", "Pulls")}</span><b>${r.tries}</b></div>
+        <div><span>${t("베스트", "Best")}</span><b>${bestPctText(killed, r.tries, r.bestPct)}</b></div>
+      </div>`;
+    if (head.dataset.html !== headHtml) {
+      head.dataset.html = headHtml;
+      head.innerHTML = headHtml;
+    }
+
+    const skeletonKey = `${r.id}|${langRef()}`;
+    if (body.dataset.key !== skeletonKey) {
+      body.dataset.key = skeletonKey;
+      body.scrollTop = 0;
+      body.innerHTML = `<div class="g-scout-live" data-part="live"></div>
+        <div class="g-scout-summary" data-part="summary"></div>
+        <div class="g-scout-roster" data-part="roster"></div>
+        <div class="g-scout-log-wrap">
+          <h3>${t("최근 기록", "Recent log")}</h3>
+          <div class="g-log g-scout-log" data-part="log"></div>
+        </div>`;
+    }
+
+    patchScoutLive(body.querySelector('[data-part="live"]'), r, c, fighting);
+    patchScoutSummary(body.querySelector('[data-part="summary"]'), r, boss);
+    patchScoutRoster(body.querySelector('[data-part="roster"]'), r, c, fighting, boss);
+
+    const logBox = body.querySelector('[data-part="log"]');
+    const logs = (r.logs || []).slice(0, 10);
+    const logKey = logs.map((l) => `${l.t}:${l.text}`).join("|");
+    if (logBox && logBox.dataset.key !== logKey) {
+      logBox.dataset.key = logKey;
+      logBox.innerHTML =
+        logs.map((l) => `<div class="g-log-line ${l.kind}">[${math().formatTime(l.t)}] ${l.text}</div>`).join("") ||
+        `<div class="empty">${t("아직 기록 없음", "No log yet")}</div>`;
+    }
+  }
+
+  function patchScoutLive(box, r, c, fighting) {
+    if (!box) return;
+    let html;
+    if (fighting) {
+      const hpPct = (c.bossHp / c.bossMaxHp) * 100;
+      const alive = c.members.filter((m) => m.alive).length;
+      const enrageText = c.enraged
+        ? `<b class="bad">${t("광폭화 중", "ENRAGED")}</b>`
+        : `${t("광폭화까지", "Enrage in")} ${math().formatTime(Math.max(0, c.enrage - c.t))}`;
+      html = `<div class="g-scout-live-top">
+          <b>${t(`트라이 #${r.tries} 진행 중`, `Try #${r.tries} in progress`)}</b>
+          <span>${hpPct.toFixed(1)}%</span>
+        </div>
+        <div class="g-hp wcl-bar"><i style="width:${Math.max(0, Math.min(100, hpPct))}%"></i></div>
+        <div class="g-scout-live-meta">
+          <span>${math().formatTime(c.t)}</span>
+          <span>P${c.phaseReached}</span>
+          <span>${t("생존", "Alive")} ${alive}/${c.members.length}</span>
+          <span>${t("전투부활", "BRez")} ${c.battleRezLeft}/${C().BATTLE_REZ_PER_TRY}</span>
+          <span>${enrageText}</span>
+        </div>`;
+    } else if (c?.finished && c.summary) {
+      const s = c.summary;
+      const ok = r.state === "victory" || !s.wipeCause;
+      const hpPct = (c.bossHp / c.bossMaxHp) * 100;
+      const cause = s.wipeCause ? (langRef() === "ko" ? s.wipeCause.ko : s.wipeCause.en) : "";
+      const mvp = s.mvp ? `MVP ${s.mvp.name}` : "";
+      html = `<div class="g-scout-last ${ok ? "ok" : "bad"}">
+          <span>${t(`지난 트라이 #${r.tries}`, `Last try #${r.tries}`)} · ${math().formatTime(s.t || c.t)}</span>
+          <b>${ok ? t("처치 성공", "Killed") : `${t("전멸", "Wipe")} ${hpPct.toFixed(1)}% · ${cause}`}</b>
+          ${ok && mvp ? `<small>${mvp}</small>` : ""}
+        </div>`;
+    } else {
+      html = `<div class="g-scout-last idle"><span>${t("아직 트라이 전", "No pulls yet")}</span><b>${
+        stateLabel(r.state)
+      } · ${r.members.length}/${C().RAID_SIZE}</b></div>`;
+    }
+    if (box.dataset.html !== html) {
+      box.dataset.html = html;
+      box.innerHTML = html;
+    }
+  }
+
+  function patchScoutSummary(box, r, boss) {
+    if (!box) return;
+    const members = r.members || [];
+    const counts = { Tank: 0, Heal: 0, Melee: 0, Ranged: 0 };
+    members.forEach((m) => counts[m.role]++);
+    const dealers = members.filter((m) => m.role !== "Heal");
+    const healers = members.filter((m) => m.role === "Heal");
+    const buffs = math().computeGameBuffs(members);
+    const synList = window.RAID_GAME_BALANCE?.gameSynergies || [];
+    const synOn = synList.filter((s) => buffs.covered[s.id]).length;
+    const fmtAvg = (list, fn) => (list.length ? avgOf(list, fn).toFixed(0) : "—");
+    const html = `<div class="g-scout-grid">
+        <div><span>${t("인원", "Roster")}</span><b>${members.length}/${C().RAID_SIZE}</b>
+          <small>${roleLabel("Tank")} ${counts.Tank} · ${roleLabel("Heal")} ${counts.Heal} · ${t("딜", "DPS")} ${
+            counts.Melee + counts.Ranged
+          }</small></div>
+        <div><span>${t("평균 딜 점수", "Avg DPS score")}</span><b>${fmtAvg(dealers, (m) => m.performanceScore)}</b></div>
+        <div><span>${t("평균 힐 점수", "Avg heal score")}</span><b>${fmtAvg(healers, (m) => m.performanceScore)}</b></div>
+        <div><span>${t("평균 생존", "Avg survival")}</span><b>${fmtAvg(members, (m) => m.survivalScore)}</b></div>
+        <div><span>${t("평균 숙련", "Avg proficiency")}</span><b>${
+          members.length ? `${avgOf(members, (m) => avgBossProficiency(m, boss)).toFixed(0)}%` : "—"
+        }</b></div>
+        <div><span>${t("시너지", "Synergies")}</span><b>${synOn}/${synList.length}</b></div>
+        <div><span>${t("대기 지원서", "Pending apps")}</span><b>${(r.applicants || []).length}</b></div>
+      </div>`;
+    if (box.dataset.html !== html) {
+      box.dataset.html = html;
+      box.innerHTML = html;
+    }
+  }
+
+  function patchScoutRoster(box, r, c, fighting, boss) {
+    if (!box) return;
+    const source = fighting ? c.members : r.members || [];
+    const key = `${fighting ? "c" : "r"}|${boss.id}|${source.map((m) => m.id).join(",")}`;
+    if (box.dataset.key !== key) {
+      box.dataset.key = key;
+      const groups = ["Tank", "Heal", "Melee", "Ranged"];
+      box.innerHTML = source.length
+        ? groups
+            .map((role) => {
+              const list = source
+                .filter((m) => m.role === role)
+                .sort((a, b) => b.performanceScore - a.performanceScore);
+              return `<div class="g-scout-col">
+              <div class="rf-group-title">${roleLabel(role)} ${list.length}</div>
+              ${
+                list
+                  .map(
+                    (m) => `<div class="g-scout-unit" data-mid="${m.id}" style="--class:${m.color || "#8ec5ff"}">
+                  <div class="g-scout-unit-top"><b>${m.name}</b><span>${
+                      langRef() === "ko" ? m.specKo || m.spec : m.spec
+                    }</span></div>
+                  <div class="g-scout-unit-stats">
+                    <span>${m.role === "Heal" ? t("힐", "Heal") : t("딜", "DPS")} ${m.performanceScore}</span>
+                    <span>${t("생존", "Surv")} ${m.survivalScore}</span>
+                    <span>${t("숙련", "Prof")} ${avgBossProficiency(m, boss).toFixed(0)}%</span>
+                  </div>
+                  ${fighting ? `<div class="g-scout-unit-hp"><i></i></div>` : ""}
+                </div>`
+                  )
+                  .join("") || `<div class="empty">—</div>`
+              }
+            </div>`;
+            })
+            .join("")
+        : `<div class="empty">${t("아직 공대원이 없습니다", "No members yet")}</div>`;
+    }
+    if (!fighting) return;
+    source.forEach((m) => {
+      const el = box.querySelector(`.g-scout-unit[data-mid="${m.id}"]`);
+      if (!el) return;
+      const dead = m.alive === false;
+      el.classList.toggle("dead", dead);
+      const bar = el.querySelector(".g-scout-unit-hp i");
+      if (bar) {
+        const w = `${dead ? 0 : Math.max(0, (m.hp / m.maxHp) * 100)}%`;
+        if (bar.style.width !== w) bar.style.width = w;
+      }
+    });
   }
 
   function patchTry(eng, p, boss, full) {
@@ -1230,7 +1507,7 @@
     const en = $("#gEnrage");
     if (en) {
       if (c?.enraged) {
-        en.textContent = `${t("광폭화 중", "ENRAGED")} ×${C().ENRAGE_DMG_MULT ?? 5}`;
+        en.textContent = t("광폭화 중", "ENRAGED");
         en.classList.add("urgent");
       } else {
         en.textContent = `${t("광폭화", "Enrage")} ${math().formatTime(left)}`;
@@ -1258,10 +1535,9 @@
     const meta = $("#gCombatMeta");
     if (meta) {
       if (c) {
-        const b = c.buffs;
-        const synBit = b
-          ? ` · Syn AD×${b.atkAd.toFixed(2)} AP×${b.atkAp.toFixed(2)} DT×${b.drMult.toFixed(2)}`
-          : "";
+        const synList = window.RAID_GAME_BALANCE?.gameSynergies || [];
+        const synOn = c.buffs ? synList.filter((s) => c.buffs.covered[s.id]).length : 0;
+        const synBit = synList.length ? ` · ${t("시너지", "Synergies")} ${synOn}/${synList.length}` : "";
         meta.textContent = `${t("생존", "Alive")} ${c.members.filter((m) => m.alive).length}/20 · DPS ${fmtNum(c.meter.dps)}/s · HPS ${fmtNum(c.meter.hps)}/s · P${c.phaseReached}${synBit}`;
       } else {
         meta.textContent = t("트라이를 시작하면 레이드 프레임이 활성화됩니다", "Start a try to activate raid frames");
@@ -1434,6 +1710,22 @@
     });
   }
 
+  function potentialLabel(v) {
+    const n = Number(v) || 1;
+    if (n >= 1.8) return t("천재형", "Prodigy");
+    if (n >= 1.55) return t("높음", "High");
+    if (n >= 1.3) return t("보통", "Average");
+    return t("낮음", "Low");
+  }
+
+  function conditionLabel(v) {
+    if (v == null) return "—";
+    if (v >= 1.1) return t("최상", "Peak");
+    if (v >= 1.02) return t("좋음", "Good");
+    if (v >= 0.95) return t("보통", "Normal");
+    return t("나쁨", "Poor");
+  }
+
   function patchInspect(p, boss) {
     const box = $("#gInspect");
     if (!box) return;
@@ -1490,7 +1782,7 @@
         <div class="g-inspect-grid">
           <div><span>${scoreLabel}</span><b>${m.performanceScore}</b></div>
           <div><span>${t("생존", "Survival")}</span><b>${m.survivalScore}</b></div>
-          <div><span>${t("잠재력", "Potential")}</span><b>${Number(m.potential).toFixed(2)}</b></div>
+          <div><span>${t("잠재력", "Potential")}</span><b>${potentialLabel(m.potential)}</b></div>
           <div><span>${t("숙련", "Proficiency")}</span><b>${profPhases || "—"}</b></div>
         </div>
         ${typeLabel ? `<div class="g-inspect-type">${typeLabel}</div>` : ""}
@@ -1508,13 +1800,10 @@
               ? `<div><span>${t("실힐 합", "Eff. heal")}</span><b>${fmtNum(m.hpsDone || 0)}</b></div>
           <div><span>${t("오버힐", "Overheal")}</span><b>${fmtNum(
             Math.max(0, (m.healCapacityDone || 0) - (m.hpsDone || 0))
-          )}</b></div>
-          <div><span>${t("용량 합", "Capacity")}</span><b>${fmtNum(m.healCapacityDone || 0)}</b></div>`
+          )}</b></div>`
               : `<div><span>${t("누적 딜", "Damage")}</span><b>${fmtNum(m.dpsDone || 0)}</b></div>`
           }
-          <div><span>${t("컨디션", "Condition")}</span><b>${
-            p.combat?.conditions?.[m.id] != null ? p.combat.conditions[m.id].toFixed(2) : "—"
-          }</b></div>
+          <div><span>${t("컨디션", "Condition")}</span><b>${conditionLabel(p.combat?.conditions?.[m.id])}</b></div>
         </div>`
             : ""
         }

@@ -263,8 +263,66 @@
     ];
   }
 
+  /**
+   * 한 전투에 네임드가 여럿인 보스. 이미지는 Wowhead NPC 모델 렌더를 상체 기준으로 자른 것.
+   * 한글명은 공식 번역 확인 전 음역.
+   */
+  const UNIT_DIR = "assets/bosses/units/";
+  const NAMED_UNITS = {
+    "entombed-sentinels": [
+      { id: "breath-of-ulatek", npcId: 258557, name: "Breath of Ula'tek", nameKo: "울라텍의 숨결", color: "#7bd66b" },
+      { id: "blood-of-ulatek", npcId: 258558, name: "Blood of Ula'tek", nameKo: "울라텍의 피", color: "#ff5a5a" },
+    ],
+    "lost-explorers": [
+      { id: "morzahi", npcId: 267077, name: "Mor'zahi", nameKo: "모르자히", color: "#ff6b72" },
+      { id: "first-mate-nama", npcId: 267066, name: "First Mate Nama", nameKo: "일등항해사 나마", color: "#f2b84b" },
+      { id: "scrollsage-iku", npcId: 267076, name: "Scrollsage Iku", nameKo: "두루마리현자 이쿠", color: "#a98bff" },
+      { id: "trader-gebbo", npcId: 267079, name: "Trader Gebbo", nameKo: "상인 게보", color: "#9bd36b" },
+    ],
+    "twin-fangs": [
+      { id: "vexhul", npcId: 257361, name: "Vexhul", nameKo: "벡스훌", color: "#9b7bff" },
+      { id: "ithraz", npcId: 257368, name: "Ithraz", nameKo: "이스라즈", color: "#ff5a5a" },
+    ],
+    "coiled-altar": [
+      { id: "zuljan", npcId: 259447, name: "Zul'jan", nameKo: "줄잔", color: "#7bd66b" },
+      { id: "malacrass", npcId: 259854, name: "Hex Lord Malacrass", nameKo: "주술 군주 말라크라스", color: "#4fd1c5" },
+    ],
+  };
+
+  // BOSS_UNITS 미등록 보스: 네임드(없으면 보스 초상화) + 쫄(add) 이벤트 스킬 아이콘으로 구성
+  function catalogBossUnits(bossId) {
+    const api = global.RaidPlannerAPI;
+    const boss = (api?.getCatalog?.()?.bosses || []).find((b) => b.id === bossId);
+    if (!boss) return [];
+    const named = NAMED_UNITS[bossId];
+    const units = named
+      ? named.map((u) => ({ ...u, iconUrl: `${UNIT_DIR}${u.id}.png` }))
+      : [
+          {
+            id: "boss",
+            name: boss.name,
+            nameKo: boss.nameKo,
+            iconUrl: api.getBossIcon?.(boss) || boss.iconUrl || null,
+            color: "#ff6b72",
+          },
+        ];
+    const seen = new Set();
+    (boss.events || []).forEach((ev) => {
+      if (ev.type !== "add" || seen.has(ev.name)) return;
+      seen.add(ev.name);
+      units.push({
+        id: `add-${ev.spellId || ev.id}`,
+        name: ev.name,
+        nameKo: ev.nameKo,
+        iconUrl: api.getEventIcon?.(ev) || ev.iconUrl || null,
+        color: "#f29b4b",
+      });
+    });
+    return units;
+  }
+
   function bossUnits(bossId) {
-    const list = BOSS_UNITS[bossId] || [];
+    const list = BOSS_UNITS[bossId] || catalogBossUnits(bossId);
     return list.map((u) => ({
       ...u,
       group: "boss",

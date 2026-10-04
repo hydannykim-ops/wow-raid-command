@@ -1,4 +1,4 @@
-import { createSession, upsertUser } from "../../_lib/auth.js";
+import { createSession, saveOAuthToken, upsertUser } from "../../_lib/auth.js";
 import { exchangeCode, fetchUserInfo } from "../../_lib/blizzard.js";
 import {
   clearCookie,
@@ -33,6 +33,11 @@ export async function onRequestGet(context) {
     const token = await exchangeCode(env, request, code);
     const profile = await fetchUserInfo(token.access_token);
     await upsertUser(env.DB, profile);
+    try {
+      await saveOAuthToken(env.DB, profile.id, token.access_token, token.expires_in);
+    } catch {
+      /* migration not applied yet */
+    }
     const sessionId = await createSession(env.DB, profile.id);
     return bounce(home(request, "?auth=ok"), [
       sessionCookie(sessionId, request),

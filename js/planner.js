@@ -105,6 +105,7 @@
   let assignmentsBossId = bossId;
 
   function syncBossAssignments() {
+    syncBossBoard();
     if (assignmentsBossId === bossId) return;
     assignmentsByBoss[assignmentsBossId] = assignments;
     assignments = assignmentsByBoss[bossId] || [];
@@ -126,15 +127,12 @@
   let wclError = null;
   /** 전체 자동 반영 진행 상황 { done, total, current[], results[] } */
   let wclBulk = null;
-  let wclSpecKey = "";
-  let wclRankings = [];
-  let wclEncounterOverride = "";
   let wclStatus = "";
   /** bossId → { phases, sampleCount, topCount, bottomCount } */
   let wclPhaseByBoss = {};
   /** 캐릭터 옆 WCL 버튼 팝오버 { playerId, bossId, key, x, y, loading, phasesLoading, error, status, applying } */
   let wclPick = null;
-  /** `${bossId}|${encId}|${class}|${spec}` → 상위 20 (transitions 포함) */
+  /** `${bossId}|${encId}|${class}|${spec}` → 상위 10 (transitions 포함) */
   const wclPickCache = {};
   /** NSRT 내보내기 창 { copied: true|false|null } */
   let nsrtModal = null;
@@ -157,7 +155,9 @@
   let boardColor = BOARD_COLORS[0];
   let steps = [];
   let stepId = null;
-  let pan = { x: 0, y: 0 };
+  // 보드 좌표계는 맵 이미지 비율(16:9)에 고정, 캔버스 크기에 맞춰 scale만 계산
+  const BOARD_W = 1024;
+  const BOARD_H = 576;
   let scale = 1;
   let selectedObjIds = new Set();
   let clipboardObjs = [];
@@ -169,14 +169,34 @@
   let dragging = null;
   let marquee = null; // { x1, y1, x2, y2, additive }
   let erasing = null;
-  let spacePan = false;
-  let panning = false;
-  let lastPan = null;
   let boardReady = false;
   let paletteTab = "elements"; // roster | elements | boss
   let stamp = null; // { kind: "player"|"element"|"boss", id }
   let handlePreviewId = null; // 방금 깐 토큰: 선택 없이 조절 핸들만 표시
   let boardMapId = null; // 다중 맵(울라텍 페이즈 등) 선택 id
+  /** 보스별 오더 그림판. 현재 보스 보드는 steps/stepId/boardMapId 에 있고, 나머지 보스는 여기 보관 */
+  let boardsByBoss = {};
+  let boardBossId = null;
+
+  function syncBossBoard() {
+    if (boardBossId === bossId) return;
+    if (boardBossId) boardsByBoss[boardBossId] = { steps, stepId, mapId: boardMapId };
+    const saved = boardsByBoss[bossId];
+    delete boardsByBoss[bossId];
+    steps = Array.isArray(saved?.steps) && saved.steps.length ? saved.steps : defaultSteps();
+    stepId = saved?.stepId && steps.some((s) => s.id === saved.stepId) ? saved.stepId : steps[0].id;
+    boardMapId = saved?.mapId || null;
+    boardBossId = bossId;
+    selectedObjIds.clear();
+    handlePreviewId = null;
+    undoStack = [];
+    redoStack = [];
+    drawing = null;
+    drawingPen = null;
+    dragging = null;
+    marquee = null;
+    erasing = null;
+  }
   const iconCache = new Map();
 
   const $ = (sel, root) => (root || document).querySelector(sel);
@@ -703,6 +723,13 @@
         source: "transition",
       };
     });
+  }
+
+  /** 전환 마커면 전환 순번, 아니면 null */
+  function phaseIdxOf(ev) {
+    if (ev?.source !== "transition") return null;
+    const n = Number(String(ev.id || "").replace("phase-", ""));
+    return Number.isInteger(n) ? n : null;
   }
 
   function phaseMarkersForBoss(boss) {
@@ -1297,14 +1324,22 @@
       assignments = assignmentsByBoss[bossId] || [];
       delete assignmentsByBoss[bossId];
       assignmentsBossId = bossId;
+      boardsByBoss = {};
+      if (data.boardsByBoss && typeof data.boardsByBoss === "object") {
+        boardsByBoss = { ...data.boardsByBoss };
+      } else if (data.board && Array.isArray(data.board.steps)) {
+        // 구버전: 보스 공용 보드 → 마지막으로 보던 보스의 보드로 이관
+        boardsByBoss[data.bossId || bossId] = {
+          steps: data.board.steps,
+          stepId: data.board.stepId,
+          mapId: data.board.mapId || null,
+        };
+      }
+      boardBossId = null;
+      syncBossBoard();
       if (data.board) {
-        steps = Array.isArray(data.board.steps) && data.board.steps.length ? data.board.steps : defaultSteps();
-        stepId = data.board.stepId || steps[0].id;
-        boardTool = data.board.tool || "select";
+        boardTool = data.board.tool && data.board.tool !== "pan" ? data.board.tool : "select";
         boardColor = data.board.color || boardColor;
-        pan = data.board.pan || pan;
-        scale = data.board.scale || 1;
-        boardMapId = data.board.mapId || null;
       }
     } catch (_) {
       /* ignore broken cache */
@@ -1327,7 +1362,8 @@
         localRoster,
         localBench,
         assignmentsByBoss: { ...assignmentsByBoss, [assignmentsBossId]: assignments },
-        board: { steps, stepId, tool: boardTool, color: boardColor, pan, scale, mapId: boardMapId },
+        boardsByBoss: { ...boardsByBoss, [boardBossId || bossId]: { steps, stepId, mapId: boardMapId } },
+        board: { tool: boardTool, color: boardColor },
       };
       try {
         localStorage.setItem(STORE_KEY, JSON.stringify(payload));
@@ -1344,10 +1380,7 @@
       bound = true;
       loadState();
       if (!localRoster.length) buildDemoRoster();
-      if (!steps.length) {
-        steps = defaultSteps();
-        stepId = steps[0].id;
-      }
+      if (!boardBossId) syncBossBoard();
       bindRoot();
     }
     ensureShell(true);
@@ -1413,8 +1446,76 @@
     document.addEventListener("pointermove", onFinePointerMove);
     document.addEventListener("pointerup", onFinePointerUp);
     document.addEventListener("pointercancel", onFinePointerUp);
+    root.addEventListener("pointerdown", onPhaseDragDown);
+    document.addEventListener("pointermove", onPhaseDragMove);
+    document.addEventListener("pointerup", onPhaseDragUp);
+    document.addEventListener("pointercancel", onPhaseDragUp);
     document.addEventListener("keydown", onKey);
-    document.addEventListener("keyup", onKeyUp);
+  }
+
+  /** 페이즈 전환선 드래그. 놓을 때 한 번만 적용(보스 스킬·쿨기 이동), 드래그 중엔 선만 이동 */
+  let phaseDrag = null;
+
+  function onPhaseDragDown(e) {
+    if (e.button !== 0) return;
+    const handle = e.target.closest?.("[data-rp='phase-drag']");
+    if (!handle) return;
+    const idx = Number(handle.dataset.idx);
+    const starts = phaseStartsFor(rawBoss(bossId));
+    if (!(idx >= 0 && idx < starts.length)) return;
+    e.preventDefault();
+    const from = starts[idx];
+    phaseDrag = {
+      idx,
+      from,
+      sec: from,
+      lastX: e.clientX,
+      acc: 0,
+      lo: (starts[idx - 1] || 0) + 1,
+      hi: starts[idx + 1] != null ? starts[idx + 1] - 1 : Math.max(from, duration - 1),
+    };
+    document.body.classList.add("rp-phase-dragging");
+    paintPhaseDrag();
+  }
+
+  function onPhaseDragMove(e) {
+    const d = phaseDrag;
+    if (!d) return;
+    const dx = e.clientX - d.lastX;
+    d.lastX = e.clientX;
+    d.acc += dx * (e.shiftKey ? 0.25 : 1);
+    d.acc = Math.max((d.lo - d.from) * zoom, Math.min((d.hi - d.from) * zoom, d.acc));
+    const sec = Math.round(d.from + d.acc / zoom);
+    if (sec !== d.sec) {
+      d.sec = sec;
+      paintPhaseDrag();
+    }
+  }
+
+  function paintPhaseDrag() {
+    const d = phaseDrag;
+    if (!d) return;
+    const diff = d.sec - d.from;
+    const tip = `${fmtTime(d.sec)} (${diff >= 0 ? "+" : "−"}${fmtTime(Math.abs(diff))})`;
+    document.querySelectorAll(`[data-phase-idx="${d.idx}"]`).forEach((el) => {
+      el.style.left = `${timeX(d.sec)}px`;
+      el.classList.add("dragging");
+      const time = el.querySelector(".rp-phase-time");
+      if (time) time.textContent = fmtTime(d.sec);
+      const bubble = el.querySelector(".rp-phase-drag-tip");
+      if (bubble) bubble.textContent = tip;
+    });
+    const inp = document.querySelector(`[data-rp='phase-input'][data-idx="${d.idx}"]`);
+    if (inp) inp.value = fmtTime(d.sec);
+  }
+
+  function onPhaseDragUp() {
+    const d = phaseDrag;
+    if (!d) return;
+    phaseDrag = null;
+    document.body.classList.remove("rp-phase-dragging");
+    if (d.sec !== d.from) setPhaseStartAt(d.idx, d.sec);
+    else renderCd();
   }
 
   function onFinePointerDown(e) {
@@ -1781,7 +1882,6 @@
       if (!next || next === bossId) return;
       bossId = next;
       syncBossAssignments();
-      boardMapId = null;
       const boss = currentBoss();
       duration = boss?.duration || duration;
       render(true);
@@ -1894,10 +1994,6 @@
       renderCd();
       return;
     }
-    if (act === "wcl-fetch") {
-      wclFetchRankings();
-      return;
-    }
     if (act === "wcl-player") {
       const player = activeRoster().find((m) => m.playerId === btn.dataset.player);
       if (player) openWclPick(player, btn.getBoundingClientRect());
@@ -1942,20 +2038,6 @@
     if (act === "phase-reset") {
       setPhaseStarts(bossId, null);
       render(true);
-      return;
-    }
-    if (act === "phase-nudge") {
-      const idx = Number(btn.dataset.idx);
-      const cur = phaseStartsFor(rawBoss(bossId))[idx];
-      setPhaseStartAt(idx, cur + Number(btn.dataset.d || 0));
-      return;
-    }
-    if (act === "wcl-apply-auto") {
-      wclApplyRank(1);
-      return;
-    }
-    if (act === "wcl-apply") {
-      wclApplyRank(Number(btn.dataset.rank) || 1);
       return;
     }
     if (act === "board-tool") {
@@ -2024,19 +2106,6 @@
       renderCd();
       return;
     }
-    const wclSpec = e.target.closest?.("[data-rp='wcl-spec']");
-    if (wclSpec) {
-      wclSpecKey = wclSpec.value || "";
-      wclRankings = [];
-      wclStatus = "";
-      renderCd();
-      return;
-    }
-    const wclEnc = e.target.closest?.("[data-rp='wcl-encounter']");
-    if (wclEnc) {
-      wclEncounterOverride = wclEnc.value || "";
-      return;
-    }
     const phaseInp = e.target.closest?.("[data-rp='phase-input']");
     if (phaseInp) {
       const sec = parseTimeInput(phaseInp.value);
@@ -2051,7 +2120,6 @@
     if (e.target.id === "rpBoss") {
       bossId = e.target.value;
       syncBossAssignments();
-      boardMapId = null;
       const boss = currentBoss();
       duration = boss?.duration || duration;
       render(true);
@@ -2065,10 +2133,6 @@
   }
 
   function onInput(e) {
-    if (e.target.dataset.rp === "wcl-encounter") {
-      wclEncounterOverride = e.target.value || "";
-      return;
-    }
     if (e.target.id === "rpNotes") {
       const step = currentStep();
       if (step) step.notes = e.target.value;
@@ -2192,23 +2256,14 @@
       pasteClipboard();
       return;
     }
-    // Space 홀드: 임시 핸드(팬) — 그리기 툴 공통
-    if (e.code === "Space" && tool === "board") {
-      e.preventDefault();
-      if (!e.repeat) {
-        spacePan = true;
-        updateBoardCursor();
-      }
-      return;
-    }
     // Z/X: 팔레트 다음/이전 스탬프 (Ctrl+Z 실행취소와 구분)
     if (!mod && !e.altKey && (key === "z" || key === "x")) {
       e.preventDefault();
       cyclePaletteStamp(key === "z" ? -1 : 1);
       return;
     }
-    // 왼손 배치: Q pan, V select, E eraser, B pen, A arrow, W line, R rect, D circle, C cone, F text
-    const map = { v: "select", q: "pan", e: "eraser", b: "pen", a: "arrow", w: "line", r: "rect", d: "circle", c: "cone", f: "text" };
+    // 왼손 배치: V select, E eraser, B pen, A arrow, W line, R rect, D circle, C cone, F text
+    const map = { v: "select", e: "eraser", b: "pen", a: "arrow", w: "line", r: "rect", d: "circle", c: "cone", f: "text" };
     if (map[key]) {
       setBoardTool(map[key]);
     }
@@ -2220,13 +2275,6 @@
       selectedObjIds.clear();
       drawBoard();
       saveState();
-    }
-  }
-
-  function onKeyUp(e) {
-    if (e.code === "Space") {
-      spacePan = false;
-      updateBoardCursor();
     }
   }
 
@@ -2297,9 +2345,7 @@
     const canvas = document.getElementById("rpCanvas");
     if (!canvas) return;
     let cur = "crosshair";
-    if (panning || spacePan || boardTool === "pan") {
-      cur = panning ? "grabbing" : "grab";
-    } else if (erasing || boardTool === "eraser") {
+    if (erasing || boardTool === "eraser") {
       cur = "cell";
     } else if (boardTool === "select") {
       if (dragging?.mode === "rotate") cur = "grab";
@@ -2363,6 +2409,11 @@
     const list = paletteStampList();
     if (!list.length) return;
     const idx = list.findIndex((s) => stamp && s.kind === stamp.kind && s.id === stamp.id);
+    // 배치 직후(선택 모드)에는 Z/X가 같은 토큰으로 복귀만 한다
+    if (boardTool !== "token" && idx >= 0) {
+      selectPaletteStamp(stamp.kind, stamp.id);
+      return;
+    }
     let next;
     if (idx < 0) {
       // 팔레트 미선택: Z → 마지막(이전), X → 첫 항목(다음)
@@ -2481,7 +2532,7 @@
             `${b.order || ""}. ${label}`
           )}" aria-pressed="${on ? "true" : "false"}">
             <span class="rp-boss-tile-num">${b.order || "?"}</span>
-            ${ico ? `<img src="${escapeAttr(ico)}" alt="">` : `<span class="rp-boss-tile-fallback">${escapeAttr((label || "?").slice(0, 1))}</span>`}
+            ${ico ? `<img src="${escapeAttr(ico)}" alt=""${b.iconUrl && b.iconUrl !== ico ? ` onerror="this.onerror=null;this.src='${escapeAttr(b.iconUrl)}'"` : ""}>` : `<span class="rp-boss-tile-fallback">${escapeAttr((label || "?").slice(0, 1))}</span>`}
           </button>`;
         })
         .join("");
@@ -2726,34 +2777,8 @@
   }
 
 
-  function healerSpecOptions() {
-    const map = new Map();
-    activeRoster()
-      .filter((m) => m.role === "Heal")
-      .forEach((m) => {
-        const key = `${m.class}|${m.spec}`;
-        if (!map.has(key)) {
-          map.set(key, {
-            key,
-            className: m.class,
-            specName: m.spec,
-            label: langRef() === "ko" ? `${m.specKo || m.spec} ${m.classKo || m.class}` : `${m.spec} ${m.class}`,
-          });
-        }
-      });
-    return [...map.values()];
-  }
-
-  function parseWclSpecKey(key) {
-    const [className, specName] = String(key || "").split("|");
-    return { className, specName };
-  }
-
   function currentWclEncounterId() {
-    const boss = currentBoss();
-    const override = Number(wclEncounterOverride);
-    if (override > 0) return override;
-    return Number(boss?.wclEncounterId) || 0;
+    return Number(currentBoss()?.wclEncounterId) || 0;
   }
 
   const WCL_CATEGORIES = new Set(["raidHeal", "raidDef", "external", "mobility"]);
@@ -2850,7 +2875,6 @@
   }
 
   function renderWclPanel() {
-    const specs = healerSpecOptions();
     if (!wclOpen) {
       return `<div class="rp-wcl-bar">
         <button type="button" class="primary" data-rp="wcl-apply-all" ${wclLoading ? "disabled" : ""}>${t(
@@ -2858,222 +2882,34 @@
           "Apply #1 for all"
         )}</button>
         <span class="rp-wcl-note">${t(
-          "캐릭터 이름 옆 WCL 버튼 = 그 전문화 상위 20 로그 (킬 타임·페이즈 시각) 보고 골라서 반영",
-          "WCL button next to each character = pick from that spec's top 20 logs (kill time · phase starts)"
+          "캐릭터 이름 옆 WCL 버튼 = 그 전문화 상위 10 로그 (킬 타임·페이즈 시각) 보고 골라서 반영",
+          "WCL button next to each character = pick from that spec's top 10 logs (kill time · phase starts)"
         )}</span>
       </div>`;
     }
-    if (!wclSpecKey && specs[0]) wclSpecKey = specs[0].key;
-    const boss = currentBoss();
-    const encId = currentWclEncounterId();
-    const rawB = rawBoss(bossId);
-    const phaseCols = phaseColumns(rawB);
-    const planStarts = phaseCols.length ? phaseStartsFor(rawB) : [];
-    const rows = (wclRankings || [])
-      .map((r) => {
-        const dur = global.WclClient?.fmtFightDuration?.(r.durationSec) || fmtTime(r.durationSec);
-        const link = r.logUrl
-          ? `<a class="rp-wcl-link" href="${escapeAttr(r.logUrl)}" target="_blank" rel="noopener">log</a>`
-          : "";
-        const phaseCells = phaseCols
-          .map((lbl, i) => {
-            const sec = r.transitions?.[i];
-            if (sec == null) {
-              return `<td class="rp-wcl-phase none" title="${escapeAttr(
-                t("이 로그에는 전환 기록이 없습니다", "No transition recorded in this log")
-              )}">${r.transitions ? "–" : "…"}</td>`;
-            }
-            const diff = sec - planStarts[i];
-            const tip = t(
-              `${lbl.ko} 시작 ${fmtTime(sec)} · 우리 플래너 ${fmtTime(planStarts[i])} 대비 ${diff >= 0 ? "+" : "−"}${fmtTime(Math.abs(diff))}`,
-              `${lbl.en} start ${fmtTime(sec)} · ${diff >= 0 ? "+" : "−"}${fmtTime(Math.abs(diff))} vs planner ${fmtTime(planStarts[i])}`
-            );
-            return `<td class="rp-wcl-phase ${diff < -2 ? "early" : diff > 2 ? "late" : ""}" title="${escapeAttr(tip)}">${fmtTime(
-              sec
-            )}</td>`;
-          })
-          .join("");
-        return `<tr>
-          <td class="rp-wcl-rank">#${r.rank}</td>
-          <td><b>${escapeAttr(r.name)}</b><em>${escapeAttr(r.server || "")}</em></td>
-          <td class="rp-wcl-dur">${dur}</td>
-          ${phaseCells}
-          <td>${link}</td>
-          <td><button type="button" class="primary" data-rp="wcl-apply" data-rank="${r.rank}">${t("반영", "Apply")}</button></td>
-        </tr>`;
-      })
-      .join("");
     return `<section class="rp-wcl-panel panel">
       <div class="rp-wcl-panel-h">
         <div>
-          <h3>${t("WCL 힐러 HPS 상위 로그", "WCL healer HPS rankings")}</h3>
+          <h3>${t("전체 1등 로그 반영", "Apply #1 for all")}</h3>
           <div class="sub">${t(
-            "자동 반영=1등 · 수동 1~20 · 로그별 페이즈 시작 시각 표시 (빨강=우리보다 빠름, 파랑=느림)",
-            "Auto=#1 · pick 1–20 · per-log phase starts (red = earlier than plan, blue = later)"
+            "개별 로그는 캐릭터 이름 옆 WCL 버튼에서 상위 10 중 골라 반영",
+            "Pick individual logs from the WCL button next to each character"
           )}</div>
         </div>
         <button type="button" class="ghost" data-rp="wcl-toggle">${t("닫기", "Close")}</button>
       </div>
       ${renderWclBulk()}
-      <div class="rp-wcl-controls">
-        <label>${t("전문화", "Spec")}
-          <select data-rp="wcl-spec">${
-            specs.length
-              ? specs
-                  .map(
-                    (s) =>
-                      `<option value="${escapeAttr(s.key)}" ${s.key === wclSpecKey ? "selected" : ""}>${escapeAttr(
-                        s.label
-                      )}</option>`
-                  )
-                  .join("")
-              : `<option value="">${t("힐러를 로스터에 추가하세요", "Add a healer to roster")}</option>`
-          }</select>
-        </label>
-        <label>${t("WCL Encounter ID", "WCL Encounter ID")}
-          <input data-rp="wcl-encounter" type="number" min="1" placeholder="${
-            boss?.wclEncounterId || t("보스별 ID 입력", "Enter boss ID")
-          }" value="${escapeAttr(wclEncounterOverride || boss?.wclEncounterId || "")}">
-        </label>
-        <button type="button" class="primary" data-rp="wcl-fetch" ${wclLoading || !specs.length ? "disabled" : ""}>
-          ${wclLoading ? t("불러오는 중…", "Loading…") : t("상위 20 불러오기", "Fetch top 20")}
-        </button>
-        <button type="button" class="ghost" data-rp="wcl-apply-auto" ${!wclRankings.length || wclLoading ? "disabled" : ""}>
-          ${t("자동 반영 (1등)", "Auto apply (#1)")}
-        </button>
-      </div>
       ${
-        !encId
-          ? `<div class="rp-wcl-warn">${t(
-              "이 보스의 WCL Encounter ID가 없습니다. 위에 숫자를 입력하세요. (WCL 보스 페이지 URL의 encounter= )",
-              "Missing WCL Encounter ID. Enter it above (from WCL encounter= in URL)."
-            )}</div>`
+        !currentWclEncounterId()
+          ? `<div class="rp-wcl-warn">${t("이 보스의 WCL Encounter ID가 없습니다.", "Missing WCL Encounter ID for this boss.")}</div>`
           : ""
       }
       ${wclError ? `<div class="rp-wcl-err">${escapeAttr(wclError)}</div>` : ""}
       ${wclStatus ? `<div class="rp-wcl-ok">${escapeAttr(wclStatus)}</div>` : ""}
-      <div class="rp-wcl-table-wrap">
-        <table class="rp-wcl-table">
-          <thead><tr>
-            <th>#</th><th>${t("캐릭터", "Character")}</th><th>${t("전투시간", "Duration")}</th>${phaseCols
-              .map((lbl) => `<th>${t(`${lbl.ko} 시작`, `${lbl.en} start`)}</th>`)
-              .join("")}<th>Log</th><th></th>
-          </tr></thead>
-          <tbody>${rows || `<tr><td colspan="${5 + phaseCols.length}" class="empty">${t("아직 없음 · 불러오기를 누르세요", "Empty · fetch rankings")}</td></tr>`}</tbody>
-        </table>
-      </div>
     </section>`;
   }
 
-  const WCL_TOP_N = 20;
-
-  async function wclFetchRankings() {
-    const { className, specName } = parseWclSpecKey(wclSpecKey);
-    const encounterId = currentWclEncounterId();
-    if (!className || !specName) {
-      wclError = t("힐러 전문화를 선택하세요.", "Pick a healer spec.");
-      renderCd();
-      return;
-    }
-    if (!encounterId) {
-      wclError = t("WCL Encounter ID가 필요합니다.", "WCL Encounter ID required.");
-      renderCd();
-      return;
-    }
-    if (!global.WclClient) {
-      wclError = "WclClient missing";
-      renderCd();
-      return;
-    }
-    wclLoading = true;
-    wclError = null;
-    wclStatus = t("상위·하위 로그 + 페이즈 수집 중…", "Fetching top/bottom + phases…");
-    renderCd();
-    try {
-      const difficulty = currentBoss()?.wclDifficulty || 5;
-      const topData = await global.WclClient.fetchRankings({
-        encounterId,
-        className,
-        specName,
-        metric: "hps",
-        difficulty,
-        pageSize: WCL_TOP_N,
-        page: 1,
-      });
-      if (!topData.ok) throw new Error(topData.error || "rankings failed");
-      wclRankings = topData.rankings || [];
-
-      const total = Number(topData.count) || wclRankings.length;
-      const lastPage = Math.max(1, Math.ceil(total / 10));
-      let bottomRankings = [];
-      if (lastPage > 1) {
-        const bottomData = await global.WclClient.fetchRankings({
-          encounterId,
-          className,
-          specName,
-          metric: "hps",
-          difficulty,
-          pageSize: 10,
-          page: lastPage,
-        });
-        if (bottomData.ok) bottomRankings = bottomData.rankings || [];
-      } else {
-        bottomRankings = [...wclRankings].reverse().slice(0, Math.min(10, wclRankings.length));
-      }
-
-      const sampleEntries = [
-        ...wclRankings.map((r) => ({ ...r, band: "top" })),
-        ...bottomRankings.map((r) => ({ ...r, band: "bottom" })),
-      ].filter((r) => r.reportCode && r.fightId != null);
-
-      const phaseResults = await global.WclClient.mapPool(sampleEntries, 4, async (entry) => {
-        try {
-          const parsed = await global.WclClient.fetchPhases({
-            reportCode: entry.reportCode,
-            fightId: entry.fightId,
-          });
-          if (!parsed.ok) return null;
-          if (entry.band === "top") {
-            const row = wclRankings.find((r) => r.reportCode === entry.reportCode && r.fightId === entry.fightId);
-            if (row) {
-              row.transitions = (parsed.phases || [])
-                .map((p) => Number(p.startSec) || 0)
-                .filter((s) => s > 0)
-                .sort((a, b) => a - b);
-            }
-          }
-          return { band: entry.band, phases: parsed.phases || [] };
-        } catch (_) {
-          return null;
-        }
-      });
-
-      wclRankings.forEach((r) => {
-        if (!r.transitions) r.transitions = [];
-      });
-      const samples = phaseResults.filter(Boolean);
-      const boss = currentBoss();
-      const planPhases = global.WclClient.plannerPhaseStarts(boss?.events || []);
-      const stats = global.WclClient.summarizePhaseStats(samples, planPhases, { minSpreadSec: 15 });
-      if (boss?.id) wclPhaseByBoss[boss.id] = stats;
-
-      const variedN = (stats.phases || []).filter((p) => p.varied).length;
-      wclStatus = t(
-        `${topData.encounterName || "보스"} · HPS 상위 ${wclRankings.length} · 하위 ${bottomRankings.length} · 페이즈샘플 ${samples.length}${
-          variedN ? ` · 편차 ${variedN}곳` : ""
-        }`,
-        `${topData.encounterName || "Boss"} · top ${wclRankings.length} · bottom ${bottomRankings.length} · phase samples ${samples.length}${
-          variedN ? ` · ${variedN} varied` : ""
-        }`
-      );
-    } catch (err) {
-      wclError = err?.data?.error || err.message || String(err);
-      wclRankings = [];
-    } finally {
-      wclLoading = false;
-      renderCd();
-    }
-  }
+  const WCL_TOP_N = 10;
 
   /** 로그 시전 기록을 targets(같은 전문화 공대원들)에 배치. 기존 같은 스킬 배치는 교체 */
   function applyWclCasts(parsed, abilityIds, targets, forBossId = bossId) {
@@ -3281,11 +3117,9 @@
           t(`기본(Viserio) ${fmtTime(base[i].t)}`, `Base (Viserio) ${fmtTime(base[i].t)}`)
         )}">
           <span class="rp-phase-name">${escapeAttr(t(lbl.ko, lbl.en))}</span>
-          <button type="button" class="ghost" data-rp="phase-nudge" data-idx="${i}" data-d="-5">−5</button>
           <input data-rp="phase-input" data-idx="${i}" value="${fmtTime(sec)}" inputmode="numeric" aria-label="${escapeAttr(
             t(`${lbl.ko} 시작 시각`, `${lbl.en} start`)
           )}">
-          <button type="button" class="ghost" data-rp="phase-nudge" data-idx="${i}" data-d="5">+5</button>
           <em>${escapeAttr(hint)}</em>
         </div>`;
       })
@@ -3742,67 +3576,6 @@
     </div>`;
   }
 
-  async function wclApplyRank(rankNum) {
-    const rank = Number(rankNum) || 1;
-    const entry = (wclRankings || []).find((r) => r.rank === rank) || wclRankings[rank - 1];
-    if (!entry?.reportCode || entry.fightId == null) {
-      wclError = t("로그 정보가 부족합니다.", "Missing report/fight.");
-      renderCd();
-      return;
-    }
-    const { className, specName } = parseWclSpecKey(wclSpecKey);
-    const abilityIds = abilityIdsForSpec(className, specName);
-    if (!abilityIds.length) {
-      wclError = t("이 스펙에 매핑된 힐/뎀감 스킬이 없습니다.", "No mapped heal/DR spells for this spec.");
-      renderCd();
-      return;
-    }
-    const targets = activeRoster().filter((m) => m.class === className && m.spec === specName);
-    if (!targets.length) {
-      wclError = t("로스터에 해당 스펙이 없습니다.", "No matching spec on roster.");
-      renderCd();
-      return;
-    }
-    const runBossId = bossId;
-    wclLoading = true;
-    wclError = null;
-    wclStatus = t(`#${rank} 반영 중…`, `Applying #${rank}…`);
-    renderCd();
-    try {
-      const parsed = await global.WclClient.fetchParse({
-        reportCode: entry.reportCode,
-        fightId: entry.fightId,
-        abilityIds,
-        playerName: entry.name,
-      });
-      if (!parsed.ok) throw new Error(parsed.error || "parse failed");
-      const placed = applyWclCasts(parsed, abilityIds, targets, runBossId);
-      const need = basePhases(rawBoss(runBossId)).length;
-      const have = logTransitionCount(parsed);
-      const phaseNote = !need
-        ? ""
-        : have >= need
-          ? t(" · 페이즈 기준", " · phase-relative")
-          : t(
-              ` · ⚠ 이 로그는 페이즈 전환 기록이 ${have}/${need}개라 일부는 전투 시각 기준`,
-              ` · ⚠ log has ${have}/${need} phase transitions; rest uses fight time`
-            );
-      wclStatus = t(
-        `#${rank} ${entry.name} · 시전 ${parsed.casts?.length || 0} · 배치 ${placed} · ${global.WclClient.fmtFightDuration(
-          parsed.fight?.durationSec || entry.durationSec
-        )}${phaseNote}`,
-        `#${rank} ${entry.name} · ${parsed.casts?.length || 0} casts · ${placed} placed${phaseNote}`
-      );
-      saveState();
-    } catch (err) {
-      wclError = err?.data?.error || err.message || String(err);
-    } finally {
-      wclLoading = false;
-      renderCd();
-    }
-  }
-
-
   function renderCd() {
     const box = document.getElementById("rpCd");
     if (!box) return;
@@ -4208,7 +3981,14 @@
     const portrait = bossPortraitUrl(boss);
     const bossPhaseLines = (events || [])
       .filter((ev) => isPhaseEvent(ev))
-      .map((ev) => `<div class="rp-phase-vline lane ${ev.varied ? "varied" : ""}" style="left:${timeX(ev.t)}px"></div>`)
+      .map((ev) => {
+        const idx = phaseIdxOf(ev);
+        return idx == null
+          ? `<div class="rp-phase-vline lane ${ev.varied ? "varied" : ""}" style="left:${timeX(ev.t)}px"></div>`
+          : `<div class="rp-phase-vline lane drag ${ev.varied ? "varied" : ""}" data-rp="phase-drag" data-idx="${idx}" data-phase-idx="${idx}" style="left:${timeX(
+              ev.t
+            )}px" title="${escapeAttr(t("드래그해서 페이즈 시작 시각 조정 (Shift = 미세 조정)", "Drag to move phase start (Shift = fine)"))}"></div>`;
+      })
       .join("");
     const allBossRows = timelineBossRows(boss);
     const filterScope = `boss:${boss?.id || ""}`;
@@ -4288,12 +4068,19 @@
                 (ev.maxSec - ev.minSec) * zoom
               )}px"></div>`
             : "";
-        return `${band}<div class="rp-phase-vline ${ev.varied ? "varied" : ""}" style="left:${left}px" title="${escapeAttr(
-          range ? `${name} · ${range}` : `${name} · ${fmtTime(ev.t)}`
+        const idx = phaseIdxOf(ev);
+        const dragAttrs =
+          idx == null ? "" : `data-rp="phase-drag" data-idx="${idx}" data-phase-idx="${idx}"`;
+        const tip = `${range ? `${name} · ${range}` : `${name} · ${fmtTime(ev.t)}`}${
+          idx == null ? "" : ` · ${t("드래그해서 조정 (Shift = 미세 조정)", "Drag to move (Shift = fine)")}`
+        }`;
+        return `${band}<div class="rp-phase-vline ${idx == null ? "" : "drag"} ${ev.varied ? "varied" : ""}" ${dragAttrs} style="left:${left}px" title="${escapeAttr(
+          tip
         )}">
           <span>${escapeAttr(name)}</span>
-          <b>${fmtTime(ev.t)}</b>
+          <b class="rp-phase-time">${fmtTime(ev.t)}</b>
           ${range ? `<em>${escapeAttr(range)}</em>` : ""}
+          ${idx == null ? "" : `<i class="rp-phase-drag-tip"></i>`}
         </div>`;
       })
       .join("");
@@ -4440,9 +4227,10 @@
                                     (ev.maxSec - ev.minSec) * zoom
                                   )}px"></div>`
                                 : "";
-                            return `${band}<div class="rp-phase-vline lane ${ev.varied ? "varied" : ""}" style="left:${timeX(
-                              ev.t
-                            )}px"></div>`;
+                            const idx = phaseIdxOf(ev);
+                            return `${band}<div class="rp-phase-vline lane ${ev.varied ? "varied" : ""}" ${
+                              idx == null ? "" : `data-phase-idx="${idx}"`
+                            } style="left:${timeX(ev.t)}px"></div>`;
                           })
                           .join("");
                         return `<div class="rp-track">
@@ -4613,7 +4401,6 @@
     if (!grid) return;
     const tools = [
       ["select", t("선택 (V)", "Select (V)")],
-      ["pan", t("이동 (Q/Space)", "Hand (Q/Space)")],
       ["eraser", t("지우개 (E)", "Eraser (E)")],
       ["pen", t("펜 (B)", "Pen (B)")],
       ["arrow", t("화살표 (A)", "Arrow (A)")],
@@ -4816,7 +4603,14 @@
     canvas.addEventListener("pointerup", onPointerUp);
     canvas.addEventListener("pointerleave", onPointerUp);
     canvas.addEventListener("contextmenu", onCanvasContextMenu);
-    canvas.addEventListener("wheel", onWheel, { passive: false });
+    const wrap = document.getElementById("rpCanvasWrap");
+    if (wrap && global.ResizeObserver) {
+      new ResizeObserver(() => {
+        if (tool !== "board") return;
+        resizeCanvas();
+        drawBoard();
+      }).observe(wrap);
+    }
     updateBoardCursor();
     if (!bindCanvas.resizeBound) {
       bindCanvas.resizeBound = true;
@@ -4834,7 +4628,7 @@
     const rect = canvas.getBoundingClientRect();
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
-    return { x: (sx - pan.x) / scale, y: (sy - pan.y) / scale, sx, sy };
+    return { x: sx / scale, y: sy / scale, sx, sy };
   }
 
   function createStampToken(x, y) {
@@ -4855,7 +4649,7 @@
         elementId: el.id,
         x,
         y,
-        r: 9,
+        r: 14,
         rot: 0,
         color: el.color || boardColor,
         label: langRef() === "ko" ? el.nameKo : el.name,
@@ -4874,7 +4668,7 @@
         elementId: unit.id,
         x,
         y,
-        r: 11,
+        r: 17,
         rot: 0,
         color: unit.color || "#ff6b72",
         label: langRef() === "ko" ? unit.nameKo || unit.name : unit.name,
@@ -4892,7 +4686,7 @@
       kind: "player",
       x,
       y,
-      r: 9,
+      r: 14,
       rot: 0,
       color: player.color || classColor(player.class) || boardColor,
       label: playerCallsign(player),
@@ -5356,12 +5150,7 @@
       eraseAt(p.x, p.y);
       return;
     }
-    if (boardTool === "pan" || spacePan || e.button === 1) {
-      panning = true;
-      lastPan = { x: e.clientX, y: e.clientY };
-      updateBoardCursor();
-      return;
-    }
+    if (e.button === 1) return;
     if (boardTool === "select") {
       const handle = hitTransformHandle(p.x, p.y);
       if (handle) {
@@ -5427,8 +5216,8 @@
         return;
       }
       currentStep().objects.push(obj);
-      selectedObjIds.clear();
-      handlePreviewId = obj.id;
+      handlePreviewId = null;
+      selectAfterCreate(obj);
       drawBoard();
       saveState();
       return;
@@ -5450,13 +5239,6 @@
 
   function onPointerMove(e) {
     const p = canvasPoint(e);
-    if (panning && lastPan) {
-      pan.x += e.clientX - lastPan.x;
-      pan.y += e.clientY - lastPan.y;
-      lastPan = { x: e.clientX, y: e.clientY };
-      drawBoard();
-      return;
-    }
     if (erasing) {
       eraseAt(p.x, p.y);
       return;
@@ -5529,21 +5311,12 @@
       drawBoard();
       return;
     }
-    if (!spacePan) {
-      const handle = hitTransformHandle(p.x, p.y);
-      if (handle) updateBoardCursor(handle.mode);
-      else if (boardTool === "select") updateBoardCursor(!!hitTest(p.x, p.y));
-    }
+    const handle = hitTransformHandle(p.x, p.y);
+    if (handle) updateBoardCursor(handle.mode);
+    else if (boardTool === "select") updateBoardCursor(!!hitTest(p.x, p.y));
   }
 
   function onPointerUp() {
-    if (panning) {
-      panning = false;
-      lastPan = null;
-      updateBoardCursor();
-      saveState();
-      return;
-    }
     if (erasing) {
       if (!erasing.erased) undoStack.pop();
       else saveState();
@@ -5602,17 +5375,6 @@
     } else undoStack.pop();
     drawBoard();
     updateBoardCursor();
-    saveState();
-  }
-
-  function onWheel(e) {
-    e.preventDefault();
-    const p = canvasPoint(e);
-    const next = Math.min(2.6, Math.max(0.4, scale * (e.deltaY > 0 ? 0.9 : 1.1)));
-    pan.x = p.sx - p.x * next;
-    pan.y = p.sy - p.y * next;
-    scale = next;
-    drawBoard();
     saveState();
   }
 
@@ -5724,8 +5486,11 @@
     const wrap = document.getElementById("rpCanvasWrap");
     if (!canvas || !wrap) return;
     const dpr = window.devicePixelRatio || 1;
-    const w = wrap.clientWidth || 800;
-    const h = wrap.clientHeight || 560;
+    const availW = wrap.clientWidth || 800;
+    const availH = wrap.clientHeight || 450;
+    scale = Math.min(availW / BOARD_W, availH / BOARD_H);
+    const w = Math.floor(BOARD_W * scale);
+    const h = Math.floor(BOARD_H * scale);
     canvas.width = Math.floor(w * dpr);
     canvas.height = Math.floor(h * dpr);
     canvas.style.width = `${w}px`;
@@ -5737,15 +5502,11 @@
   function drawBoard() {
     const canvas = document.getElementById("rpCanvas");
     if (!canvas) return;
-    const wrap = document.getElementById("rpCanvasWrap");
     const ctx = canvas.getContext("2d");
-    const w = wrap.clientWidth || 800;
-    const h = wrap.clientHeight || 560;
-    ctx.clearRect(0, 0, w, h);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
-    ctx.translate(pan.x, pan.y);
     ctx.scale(scale, scale);
-    drawArena(ctx, w, h);
+    drawArena(ctx);
     const objs = [...(currentStep()?.objects || [])];
     if (drawing) {
       const live = shapeFromDraft(drawing);
@@ -5769,57 +5530,38 @@
     ctx.restore();
   }
 
-  function drawArena(ctx, w, h) {
-    const cw = w / scale;
-    const ch = h / scale;
+  function drawArena(ctx) {
     ctx.fillStyle = "#0c121a";
-    ctx.fillRect(-pan.x / scale - 20, -pan.y / scale - 20, cw + 40, ch + 40);
+    ctx.fillRect(0, 0, BOARD_W, BOARD_H);
 
-    const cx = 420;
-    const cy = 280;
-    const mapBoxW = 760;
-    const mapBoxH = 540;
+    const cx = BOARD_W / 2;
+    const cy = BOARD_H / 2;
     const mapImg = global.BoardAssets?.loadBossMap?.(bossId, boardMapId, () => {
       if (tool === "board") drawBoard();
     });
 
     if (mapImg && mapImg.naturalWidth) {
-      const s = Math.min(mapBoxW / mapImg.naturalWidth, mapBoxH / mapImg.naturalHeight);
-      const dw = mapImg.naturalWidth * s;
-      const dh = mapImg.naturalHeight * s;
-      const dx = cx - dw / 2;
-      const dy = cy - dh / 2;
-      ctx.save();
-      ctx.shadowColor = "rgba(0,0,0,0.45)";
-      ctx.shadowBlur = 18;
-      ctx.drawImage(mapImg, dx, dy, dw, dh);
-      ctx.shadowBlur = 0;
-      ctx.strokeStyle = "rgba(58,84,114,0.85)";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(dx, dy, dw, dh);
-      ctx.restore();
+      ctx.drawImage(mapImg, 0, 0, BOARD_W, BOARD_H);
       return;
     }
 
     // 맵 미로드·미등록 시 기본 원형 아레나
     ctx.strokeStyle = "#1d2a3a";
     ctx.lineWidth = 1;
-    const ox = -pan.x / scale;
-    const oy = -pan.y / scale;
-    for (let x = Math.floor(ox / 40) * 40; x < ox + cw; x += 40) {
+    for (let x = 0; x <= BOARD_W; x += 40) {
       ctx.beginPath();
-      ctx.moveTo(x, oy);
-      ctx.lineTo(x, oy + ch);
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, BOARD_H);
       ctx.stroke();
     }
-    for (let y = Math.floor(oy / 40) * 40; y < oy + ch; y += 40) {
+    for (let y = 0; y <= BOARD_H; y += 40) {
       ctx.beginPath();
-      ctx.moveTo(ox, y);
-      ctx.lineTo(ox + cw, y);
+      ctx.moveTo(0, y);
+      ctx.lineTo(BOARD_W, y);
       ctx.stroke();
     }
     ctx.beginPath();
-    ctx.arc(cx, cy, 210, 0, Math.PI * 2);
+    ctx.arc(cx, cy, 230, 0, Math.PI * 2);
     ctx.strokeStyle = "#3a5472";
     ctx.lineWidth = 3;
     ctx.stroke();
@@ -5929,8 +5671,14 @@
         ctx.arc(0, 0, r, 0, Math.PI * 2);
         if (img) {
           ctx.save();
+          ctx.fillStyle = "#0b1017";
+          ctx.fill();
           ctx.clip();
-          ctx.drawImage(img, -r, -r, r * 2, r * 2);
+          // 정사각형이 아닌 이미지(보스 초상화 등)는 비율 유지 후 잘라서 채운다
+          const side = Math.min(img.naturalWidth, img.naturalHeight) || 1;
+          const sx = (img.naturalWidth - side) * 0.4;
+          const sy = (img.naturalHeight - side) * 0.3;
+          ctx.drawImage(img, sx, sy, side, side, -r, -r, r * 2, r * 2);
           ctx.restore();
         } else {
           ctx.fillStyle = o.color || "#f2b84b";
@@ -5967,8 +5715,18 @@
     ctx.restore();
   }
 
+  function importFromHelper() {
+    const ok = importHelperRoster();
+    if (ok) {
+      render(true);
+      saveState();
+    }
+    return ok;
+  }
+
   global.RaidPlanner = {
     mount,
     render,
+    importFromHelper,
   };
 })(window);

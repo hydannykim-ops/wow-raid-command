@@ -1,4 +1,5 @@
 import { json } from "../../_lib/http.js";
+import { cacheHeaders, readWclCache, wclCacheKey, writeWclCache } from "../../_lib/wcl-cache.js";
 import { wclConfigured, wclGraphql } from "../../_lib/wcl.js";
 
 /**
@@ -33,6 +34,15 @@ export async function onRequestGet(context) {
   }
 
   const phasesOnly = abilityIds.length === 0 || url.searchParams.get("phasesOnly") === "1";
+  const cacheKey = wclCacheKey([
+    "parse",
+    reportCode,
+    fightId,
+    phasesOnly ? "phases" : abilityIds.slice().sort((a, b) => a - b).join(","),
+    playerName,
+  ]);
+  const cached = await readWclCache(env, request, cacheKey);
+  if (cached) return json(cached, 200, cacheHeaders(true));
   const filterExpression = phasesOnly
     ? null
     : `type = "cast" and ability.id in (${abilityIds.join(",")})`;
@@ -214,7 +224,7 @@ export async function onRequestGet(context) {
           .filter((c) => c.abilityId && abilityIds.includes(c.abilityId))
           .sort((a, b) => a.tSec - b.tSec);
 
-    return json({
+    const payload = {
       ok: true,
       configured: true,
       reportCode,
@@ -230,7 +240,10 @@ export async function onRequestGet(context) {
       source,
       casts,
       logUrl: `https://www.warcraftlogs.com/reports/${reportCode}#fight=${fightId}`,
-    });
+      cached: false,
+    };
+    await writeWclCache(env, cacheKey, "parse", payload);
+    return json(payload, 200, cacheHeaders(false));
   } catch (err) {
     return json({ ok: false, configured: true, error: String(err.message || err) }, 502);
   }

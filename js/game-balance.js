@@ -18,7 +18,7 @@
       // Tank 고정 2 · Heal 4~5 (5힐이면 DPS 13)
       need: { Tank: 2, Heal: 4, HealMax: 5, DPS: 14 },
       benchMax: 4, // 플레이어 후보 선수
-      poolSize: 300,
+      poolSize: 1000,
       aiCount: 10,
     },
 
@@ -187,10 +187,10 @@
     pool: {
       // 역할 가중 (누적 확률)
       roleWeights: {
-        // 11공대 × 탱2 = 최소 22, 여유 있게 ~18%
-        Tank: 0.18,
-        Heal: 0.38, // Tank~Heal → 힐 ~20%
-        Melee: 0.68,
+        // 공대 수요 비율에 맞춤: 탱 2/20=10% · 힐 4~5/20≈22% · 딜 ~68%
+        Tank: 0.11, // 탱 ~11% (풀 1000 기준 ~110명)
+        Heal: 0.33, // Tank~Heal → 힐 ~22%
+        Melee: 0.66, // 근딜 ~33% · 나머지 원딜 ~34%
       },
       performance: { min: 35, max: 98, eliteChance: 0.08, eliteBonus: 8 },
       survival: { min: 30, max: 97 },
@@ -209,7 +209,8 @@
     recruit: {
       applyExpireSec: 30, // 지원 만료 (거절 아님)
       playerRepDefault: 86,
-      aiRep: { min: 48, max: 88 },
+      // AI 명성: min~max 균등 간격 분포 (+ 소폭 흔들림) · 공대 번호와는 무작위 매칭
+      aiRep: { min: 40, max: 95, jitter: 2 },
       playerApplyWeight: 1.35, // 플레이어 공대 지원 가중
       playerQueueMax: 12,
       aiQueueMax: 6,
@@ -233,11 +234,115 @@
       aiPullChanceBase: 0.2,
       aiPullChanceSpeed: 0.35,
       aiRetryChance: 0.4, // 전멸 후 재도전 확률 × aiSpeed
-      // AI 성격 범위
+      // AI 성격 범위 (페르소나 미지정 시 폴백)
       aiGreed: { min: 0.35, max: 0.85 },
       aiSpeed: { min: 0.4, max: 1.0 },
       // 지원자 평가 가중
       scoreWeights: { perf: 0.45, surv: 0.35, prof: 0.2 },
+
+      /*
+       * AI 구인 성격 (페르소나)
+       *  greed    : 높을수록 수락 문턱↑ · 미달자 거절 확률↑
+       *  speed    : 높을수록 문턱 완화 · 출발/재도전 빠름
+       *  weights  : 지원자 평가 가중 (perf/surv/prof/pot) — 평균 점수가 같도록 자동 보정
+       *  procMax  : 초당 지원서 처리 최대 수
+       *  retryMult: 전멸 후 재도전 확률 배수
+       *  guilds   : 이 성격 공대가 쓸 이름 후보 (시즌마다 겹치지 않게 무작위)
+       */
+      aiPersonas: {
+        elite: {
+          nameKo: "명문", name: "Elite",
+          descKo: "고스펙만 엄선 · 거절 많음 · 신중한 출발", desc: "Picky, high standards, careful pulls",
+          greed: [0.85, 0.95], speed: [0.5, 0.6],
+          weights: { perf: 0.5, surv: 0.35, prof: 0.15 }, procMax: 2, retryMult: 0.9,
+          guilds: [
+            { ko: "왕좌의 서약", en: "Oath of the Throne" },
+            { ko: "황금 사자단", en: "Golden Lions" },
+            { ko: "은빛 왕관", en: "Silver Crown" },
+          ],
+        },
+        hardcore: {
+          nameKo: "하드코어", name: "Hardcore",
+          descKo: "딜 최우선 · 빠른 트라이", desc: "DPS first, fast pulls",
+          greed: [0.7, 0.8], speed: [0.9, 1.0],
+          weights: { perf: 0.65, surv: 0.2, prof: 0.15 }, procMax: 3, retryMult: 1.3,
+          guilds: [
+            { ko: "핏빛 칼날", en: "Crimson Blades" },
+            { ko: "광전사 연대", en: "Berserker Legion" },
+            { ko: "폭주 기관차", en: "Runaway Engine" },
+          ],
+        },
+        veteran: {
+          nameKo: "숙련 우대", name: "Veteran",
+          descKo: "보스 숙련도 높은 사람 우선", desc: "Prefers boss proficiency",
+          greed: [0.6, 0.7], speed: [0.55, 0.65],
+          weights: { perf: 0.3, surv: 0.25, prof: 0.45 }, procMax: 2, retryMult: 1,
+          guilds: [
+            { ko: "백전노장", en: "Hundred Battles" },
+            { ko: "노병의 맹세", en: "Veterans' Vow" },
+            { ko: "옛 전장의 그림자", en: "Shades of Old Wars" },
+          ],
+        },
+        survival: {
+          nameKo: "생존 중시", name: "Survivor",
+          descKo: "안 죽는 사람 우선", desc: "Prefers survival",
+          greed: [0.5, 0.6], speed: [0.5, 0.6],
+          weights: { perf: 0.25, surv: 0.6, prof: 0.15 }, procMax: 2, retryMult: 1,
+          guilds: [
+            { ko: "철벽 수호대", en: "Ironwall Wardens" },
+            { ko: "불사의 방패", en: "Undying Shield" },
+            { ko: "끝까지 산다", en: "Last One Standing" },
+          ],
+        },
+        balanced: {
+          nameKo: "실속형", name: "Balanced",
+          descKo: "무난한 균형형", desc: "Balanced",
+          greed: [0.45, 0.55], speed: [0.6, 0.7],
+          weights: { perf: 0.45, surv: 0.35, prof: 0.2 }, procMax: 2, retryMult: 1,
+          guilds: [
+            { ko: "균형의 저울", en: "Scales of Balance" },
+            { ko: "실속 상회", en: "Practical Company" },
+            { ko: "평원 순찰대", en: "Plains Patrol" },
+            { ko: "중도 연합", en: "Middle Path" },
+          ],
+        },
+        growth: {
+          nameKo: "육성형", name: "Growth",
+          descKo: "잠재력 높은 신입 선호", desc: "Prefers high potential",
+          greed: [0.4, 0.5], speed: [0.45, 0.55],
+          weights: { perf: 0.25, surv: 0.2, prof: 0.05, pot: 0.5 }, procMax: 2, retryMult: 1,
+          guilds: [
+            { ko: "새싹 원정대", en: "Sprout Expedition" },
+            { ko: "떠오르는 별", en: "Rising Stars" },
+            { ko: "내일의 영웅", en: "Heroes of Tomorrow" },
+          ],
+        },
+        casual: {
+          nameKo: "친목형", name: "Casual",
+          descKo: "느긋 · 웬만하면 받음", desc: "Relaxed, accepts most",
+          greed: [0.2, 0.3], speed: [0.3, 0.4],
+          weights: { perf: 0.4, surv: 0.4, prof: 0.2 }, procMax: 1, retryMult: 0.7,
+          guilds: [
+            { ko: "주말 모닥불", en: "Weekend Campfire" },
+            { ko: "느긋한 여관", en: "Lazy Inn" },
+            { ko: "수다 길드", en: "Chatterbox Guild" },
+          ],
+        },
+        rush: {
+          nameKo: "속공형", name: "Rush",
+          descKo: "아무나 받고 바로 출발", desc: "Takes anyone, pulls ASAP",
+          greed: [0.1, 0.2], speed: [0.95, 1.0],
+          weights: { perf: 0.5, surv: 0.3, prof: 0.2 }, procMax: 3, retryMult: 1.5,
+          guilds: [
+            { ko: "번개 돌격대", en: "Lightning Rush" },
+            { ko: "일단 쳐", en: "Pull First" },
+            { ko: "급행 열차", en: "Express Train" },
+            { ko: "닥돌 원정대", en: "Charge Squad" },
+          ],
+        },
+      },
+      // 명성 높은 순서대로 배정 (AI 수가 다르면 비율로 매핑)
+      aiPersonaByRank: ["elite", "hardcore", "veteran", "survival", "balanced", "growth", "balanced", "casual", "rush", "rush"],
     },
 
     /* =========================================================
@@ -576,6 +681,9 @@
       "v1.4 — 보스별 hpSec/enrageSec, 광폭화 ×5, 페이즈별 tankBuster/random/aoe 스킬, 힐러 타입 전문화 고정",
       "v1.5 — 딜러 1.5분/2분 쿨기(20초 폭딜). 6분 정렬·기대 DPS=1.0. 평타 11/14, 폭딜 롤은 창당 1회",
       "v1.6 — 트라이창 FX: 보스 초상/테마, Web Audio SFX, 스킬·킬/전멸 연출, 음소거",
+      "v1.7 — 인재풀 300→1000. 역할 비율 탱 18→11% · 힐 ~22% · 근딜 ~33% · 원딜 ~34%",
+      "v1.8 — AI 명성 40~95 균등 분포 · 명성 순 구인 성격(명문/하드코어/숙련/생존/실속/육성/친목/속공). 진행도 표에 전 공대 베스트%",
+      "v1.9 — AI 공대 이름을 성격별 길드명으로 (시즌마다 무작위 · 중복 없음)",
       "난이도 올리고 싶으면: bosses[].skills[].interval ↓ 또는 hitMult ↑, unit.hitPct ↑, hazard.doubleChanceMult ↑",
       "즉사만 줄이려면: hazard.fatalChanceMult ↓ 또는 fatalDiv ↑",
       "2배 피격만 줄이려면: hazard.doubleChanceMult ↓",
