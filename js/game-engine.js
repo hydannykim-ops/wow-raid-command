@@ -1560,14 +1560,56 @@
     return m;
   }
 
+  /** 인재풀 전체 기준 실력 백분위 (0=최하 · 1=최상) */
+  function poolQualityPct(pool, boss) {
+    const scored = pool.map((c) => ({ id: c.id, s: scoreApplicant(c, boss) })).sort((a, b) => a.s - b.s);
+    const n = Math.max(1, scored.length - 1);
+    const pct = new Map();
+    scored.forEach((x, i) => pct.set(x.id, i / n));
+    return pct;
+  }
+
+  function repRange(raids) {
+    const reps = raids.map((r) => r.reputation);
+    const lo = Math.min(...reps);
+    const hi = Math.max(...reps);
+    return { lo, hi, span: Math.max(1, hi - lo) };
+  }
+
+  /** 지원자 → 공대 선호 가중 (자기 실력대 명성 공대에 몰림) */
+  function applyWeight(raid, candPct, range) {
+    const m = B.recruit.repMatch || {};
+    const aim = range.lo + candPct * range.span;
+    const d = raid.reputation - aim;
+    const sigma = d > 0 ? m.sigmaUp ?? 13 : m.sigmaDown ?? 7;
+    const match = Math.max(m.floor ?? 0.02, Math.exp(-0.5 * (d / sigma) ** 2));
+    const popularity = Math.pow(Math.max(0.15, raid.reputation) / 100, m.popularityExp ?? 0.6);
+    return match * popularity * (raid.isPlayer ? B.recruit.playerApplyWeight ?? 1.35 : 1);
+  }
+
+  /** AI 공대가 요구하는 최소 실력 백분위 */
+  function aiRequiredPct(raid, range, globalClock, scarce) {
+    const q = B.recruit.aiReqPct || {};
+    const rank = (raid.reputation - range.lo) / range.span;
+    let req = (q.lo ?? 0.12) + ((q.hi ?? 0.78) - (q.lo ?? 0.12)) * rank + (raid.aiGreed - 0.6) * (q.greedK ?? 0.15);
+    if (scarce) req *= q.scarceMult ?? 0.8;
+    const relaxStart = q.relaxStartSec ?? 150;
+    if (globalClock > relaxStart) {
+      const relaxed = req - Math.floor((globalClock - relaxStart) / 30) * (q.relaxPer30s ?? 0.03);
+      req = Math.max(req * (q.relaxFloorMult ?? 0.6), relaxed);
+    }
+    return clamp(req, 0, 0.95);
+  }
+
   /**
-   * Each second: idle candidates decide to apply, weighted by raid reputation.
+   * Each second: idle candidates apply — weighted toward raids whose reputation matches their skill.
    */
   function tickApplications(pool, raids, boss, nowSec) {
     const idle = pool.filter((c) => c.status === "idle");
-    // Expected applications per second ~ proportional to idle / remaining slots demand
     const openRaids = raids.filter((r) => r.state === "recruiting" || r.state === "ready" || r.state === "dead");
     if (!openRaids.length || !idle.length) return;
+    const qualityPct = poolQualityPct(pool, boss);
+    const range = repRange(raids);
 
     const ap = B.recruit.applyPerSec || {};
     const applyCount = Math.min(
@@ -1589,9 +1631,8 @@
       );
       if (!targets.length) continue;
 
-      const weights = targets.map(
-        (r) => Math.max(0.15, r.reputation) * (r.isPlayer ? B.recruit.playerApplyWeight ?? 1.35 : 1)
-      );
+      const candPct = qualityPct.get(c.id) ?? 0.5;
+      const weights = targets.map((r) => applyWeight(r, candPct, range));
       const sum = weights.reduce((a, b) => a + b, 0);
       let roll = Math.random() * sum;
       let chosen = targets[0];
@@ -1614,10 +1655,10 @@
     // AI auto-recruit
     raids
       .filter((r) => !r.isPlayer && (r.state === "recruiting" || r.state === "ready" || r.state === "dead"))
-      .forEach((r) => aiRecruitTick(r, boss, nowSec));
+      .forEach((r) => aiRecruitTick(r, boss, nowSec, qualityPct, range));
   }
 
-  function aiRecruitTick(raid, boss, globalClock) {
+  function aiRecruitTick(raid, boss, globalClock, qualityPct, range) {
     if (!raid.applicants.length) return;
     const R = B.recruit;
     const slowUntil = R.aiSlowUntil ?? 55;
@@ -1626,6 +1667,10 @@
       globalClock < slowUntil ? R.aiSlowGate ?? 0.28 : globalClock < midUntil ? R.aiMidGate ?? 0.55 : 1;
     if (Math.random() > slowGate) return;
 
+    // 성격 가중 점수 기준으로 좋은 지원자부터 검토
+    const own = new Map(raid.applicants.map((c) => [c.id, scoreApplicant(c, boss, raid.aiWeights)]));
+    raid.applicants.sort((a, b) => own.get(b.id) - own.get(a.id));
+
     const n = globalClock < slowUntil ? (Math.random() < 0.55 ? 1 : 0) : rndInt(0, raid.aiProcMax ?? 2);
     for (let i = 0; i < n && raid.applicants.length; i++) {
       const c = raid.applicants[0];
@@ -1633,17 +1678,11 @@
         rejectCandidate(raid, c);
         continue;
       }
-      const score = scoreApplicant(c, boss, raid.aiWeights);
-      const threshold = (R.aiScoreBase ?? 42) + raid.aiGreed * (R.aiScoreGreed ?? 35);
-      const filled = raid.members.length / RAID_SIZE;
-      const bar = threshold * (0.55 + 0.45 * filled) - raid.aiSpeed * 8;
-      const early = R.aiEarlyFill ?? 0.35;
-      // 탱/힐이 비면 문턱을 크게 낮춰 출발 불능을 방지
       const scarce =
         (c.role === "Tank" && roleCounts(raid.members).Tank < TANK_NEED) ||
         (c.role === "Heal" && roleCounts(raid.members).Heal < HEAL_MIN);
-      const acceptBar = scarce ? bar * (R.aiScarceBarMult ?? 0.45) : bar;
-      if (score >= acceptBar || (filled < early && score >= bar * (R.aiEarlyBarMult ?? 0.7)) || (scarce && score >= 28)) {
+      const candPct = qualityPct.get(c.id) ?? 0.5;
+      if (candPct >= aiRequiredPct(raid, range, globalClock, scarce)) {
         acceptCandidate(raid, c);
       } else if (
         !scarce &&

@@ -1,3 +1,14 @@
+const MAX_ROSTERS = 10;
+
+function parsePlan(raw) {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 export async function listRosters(db, userId) {
   return db
     .prepare(
@@ -13,7 +24,7 @@ export async function listRosters(db, userId) {
 export async function getRoster(db, userId, rosterId) {
   const roster = await db
     .prepare(
-      `SELECT id, name, size, created_at, updated_at
+      `SELECT id, name, size, plan_json, created_at, updated_at
        FROM rosters
        WHERE id = ? AND user_id = ?`
     )
@@ -29,33 +40,50 @@ export async function getRoster(db, userId, rosterId) {
     )
     .bind(rosterId)
     .all();
-  return { ...roster, members: members.results || [] };
+  const { plan_json, ...rest } = roster;
+  return { ...rest, members: members.results || [], plan: parsePlan(plan_json) };
 }
 
-export async function saveRoster(db, userId, { id, name, size, members }) {
-  const rosterId = id || crypto.randomUUID();
+export async function saveRoster(db, userId, { id, name, size, members, plan }) {
+  const existing = id
+    ? await db.prepare("SELECT id, plan_json FROM rosters WHERE id = ? AND user_id = ?").bind(id, userId).first()
+    : null;
+  if (id && !existing) return { error: "not_found" };
+
+  if (!existing) {
+    const row = await db
+      .prepare("SELECT COUNT(*) AS n FROM rosters WHERE user_id = ?")
+      .bind(userId)
+      .first();
+    if ((row?.n || 0) >= MAX_ROSTERS) return { error: "limit" };
+  }
+
+  const rosterId = existing?.id || id || crypto.randomUUID();
   const rosterName = (name || "My Roster").slice(0, 80);
   const rosterSize = Number(size) || 20;
   const list = Array.isArray(members) ? members : [];
+  const planJson =
+    plan === undefined ? existing?.plan_json ?? null : plan == null ? null : JSON.stringify(plan);
 
   await db
     .prepare(
-      `INSERT INTO rosters (id, user_id, name, size, updated_at)
-       VALUES (?, ?, ?, ?, datetime('now'))
+      `INSERT INTO rosters (id, user_id, name, size, plan_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'))
        ON CONFLICT(id) DO UPDATE SET
          name = excluded.name,
          size = excluded.size,
+         plan_json = excluded.plan_json,
          updated_at = excluded.updated_at
        WHERE user_id = excluded.user_id`
     )
-    .bind(rosterId, userId, rosterName, rosterSize)
+    .bind(rosterId, userId, rosterName, rosterSize, planJson)
     .run();
 
   const owned = await db
     .prepare("SELECT id FROM rosters WHERE id = ? AND user_id = ?")
     .bind(rosterId, userId)
     .first();
-  if (!owned) return null;
+  if (!owned) return { error: "not_found" };
 
   await db.prepare("DELETE FROM roster_members WHERE roster_id = ?").bind(rosterId).run();
 
@@ -69,7 +97,7 @@ export async function saveRoster(db, userId, { id, name, size, members }) {
   );
   if (stmts.length) await db.batch(stmts);
 
-  return getRoster(db, userId, rosterId);
+  return { roster: await getRoster(db, userId, rosterId) };
 }
 
 export async function deleteRoster(db, userId, rosterId) {

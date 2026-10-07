@@ -62,12 +62,11 @@
   const FINE_SLOTS = 20;
 
   let tool = "cd";
-  const GRID_ENABLED = false;
-  let cdView = GRID_ENABLED ? "grid" : "timeline";
   let selectedSpellId = null;
   let selectedPlayerId = null;
   let selectedAssignId = null;
-  let rosterMode = "demo";
+  let rosterMode = "empty";
+  const TEMP_RAID_ID = "temp-helper";
   let localRoster = [];
   let localBench = [];
   let bossId = "nekzali";
@@ -103,6 +102,19 @@
   /** 보스별 배치. 현재 보스 배치는 assignments 에 있고, 나머지 보스는 여기 보관 */
   let assignmentsByBoss = {};
   let assignmentsBossId = bossId;
+  let activeRaidId = null;
+  let savedRaids = [];
+  let raidBusy = false;
+  let raidSaveTimer = null;
+  const PLAN_PAGE_COUNT = 5;
+  let planPage = 0;
+  let planPages = Array.from({ length: PLAN_PAGE_COUNT }, () => ({ assignmentsByBoss: {}, boardsByBoss: {} }));
+  let fitAfterRender = false;
+  let shareReadonly = false;
+  let activeShareId = null;
+  let shareInfo = null;
+  let shareModal = null;
+  let shareBusy = false;
 
   function syncBossAssignments() {
     syncBossBoard();
@@ -115,10 +127,151 @@
   }
 
   function dropPlayerAssignments(playerId) {
-    assignments = assignments.filter((a) => a.playerId !== playerId);
+    const keep = (a) => a.playerId !== playerId;
+    assignments = assignments.filter(keep);
     Object.keys(assignmentsByBoss).forEach((k) => {
-      assignmentsByBoss[k] = assignmentsByBoss[k].filter((a) => a.playerId !== playerId);
+      assignmentsByBoss[k] = assignmentsByBoss[k].filter(keep);
     });
+    planPages.forEach((p) => {
+      if (!p?.assignmentsByBoss) return;
+      Object.keys(p.assignmentsByBoss).forEach((k) => {
+        p.assignmentsByBoss[k] = (p.assignmentsByBoss[k] || []).filter(keep);
+      });
+    });
+  }
+
+  function pruneAssignmentsToRoster() {
+    const ids = new Set([...localRoster, ...localBench].map((m) => m.playerId));
+    const keep = (a) => ids.has(a.playerId);
+    assignments = assignments.filter(keep);
+    Object.keys(assignmentsByBoss).forEach((k) => {
+      assignmentsByBoss[k] = (assignmentsByBoss[k] || []).filter(keep);
+    });
+    planPages.forEach((p) => {
+      if (!p?.assignmentsByBoss) return;
+      Object.keys(p.assignmentsByBoss).forEach((k) => {
+        p.assignmentsByBoss[k] = (p.assignmentsByBoss[k] || []).filter(keep);
+      });
+    });
+  }
+
+  function clampPlanPage(n) {
+    const i = Number(n);
+    return Number.isInteger(i) && i >= 0 && i < PLAN_PAGE_COUNT ? i : 0;
+  }
+
+  function blankPlanPage() {
+    return { assignmentsByBoss: {}, boardsByBoss: {} };
+  }
+
+  function cleanAssigns(list) {
+    return Array.isArray(list)
+      ? list.filter((a) => a.spellId && a.spellId !== "bloodlust" && a.eventId !== "pull" && spellById(a.spellId))
+      : [];
+  }
+
+  function normalizePages(raw) {
+    const pages = Array.from({ length: PLAN_PAGE_COUNT }, () => blankPlanPage());
+    if (!Array.isArray(raw)) return pages;
+    raw.slice(0, PLAN_PAGE_COUNT).forEach((p, i) => {
+      if (!p || typeof p !== "object") return;
+      const nextAssigns = {};
+      if (p.assignmentsByBoss && typeof p.assignmentsByBoss === "object") {
+        Object.entries(p.assignmentsByBoss).forEach(([k, list]) => {
+          nextAssigns[k] = cleanAssigns(list);
+        });
+      }
+      pages[i] = {
+        assignmentsByBoss: nextAssigns,
+        boardsByBoss: p.boardsByBoss && typeof p.boardsByBoss === "object" ? { ...p.boardsByBoss } : {},
+      };
+    });
+    return pages;
+  }
+
+  function snapshotCurrentPage() {
+    syncBossAssignments();
+    syncBossBoard();
+    planPages = normalizePages(planPages);
+    planPage = clampPlanPage(planPage);
+    const assigns = { ...assignmentsByBoss, [assignmentsBossId]: assignments };
+    const copied = {};
+    Object.entries(assigns).forEach(([k, list]) => {
+      copied[k] = Array.isArray(list) ? [...list] : [];
+    });
+    planPages[planPage] = {
+      assignmentsByBoss: copied,
+      boardsByBoss: { ...boardsByBoss, [boardBossId || bossId]: { steps, stepId, mapId: boardMapId } },
+    };
+  }
+
+  function hydratePage(page) {
+    const data = page && typeof page === "object" ? page : blankPlanPage();
+    assignmentsByBoss = {};
+    if (data.assignmentsByBoss && typeof data.assignmentsByBoss === "object") {
+      Object.entries(data.assignmentsByBoss).forEach(([k, list]) => {
+        assignmentsByBoss[k] = cleanAssigns(list);
+      });
+    }
+    assignments = assignmentsByBoss[bossId] || [];
+    delete assignmentsByBoss[bossId];
+    assignmentsBossId = bossId;
+    boardsByBoss = data.boardsByBoss && typeof data.boardsByBoss === "object" ? { ...data.boardsByBoss } : {};
+    boardBossId = null;
+    selectedAssignId = null;
+    pruneAssignmentsToRoster();
+    syncBossBoard();
+  }
+
+  function applyPagesFromPlan(data) {
+    if (Array.isArray(data?.pages) && data.pages.length) {
+      planPages = normalizePages(data.pages);
+      planPage = clampPlanPage(data.pageIndex);
+      hydratePage(planPages[planPage]);
+      return;
+    }
+    planPages = normalizePages(null);
+    planPage = 0;
+    const nextAssigns = {};
+    if (data?.assignmentsByBoss && typeof data.assignmentsByBoss === "object") {
+      Object.entries(data.assignmentsByBoss).forEach(([k, list]) => {
+        nextAssigns[k] = cleanAssigns(list);
+      });
+    } else if (Array.isArray(data?.assignments)) {
+      nextAssigns[data.bossId || bossId] = cleanAssigns(data.assignments);
+    }
+    planPages[0] = {
+      assignmentsByBoss: nextAssigns,
+      boardsByBoss:
+        data?.boardsByBoss && typeof data.boardsByBoss === "object"
+          ? { ...data.boardsByBoss }
+          : data?.board && Array.isArray(data.board.steps)
+            ? { [data.bossId || bossId]: { steps: data.board.steps, stepId: data.board.stepId, mapId: data.board.mapId || null } }
+            : {},
+    };
+    hydratePage(planPages[0]);
+  }
+
+  function setPlanPage(idx) {
+    const next = clampPlanPage(idx);
+    if (next === planPage) return;
+    snapshotCurrentPage();
+    planPage = next;
+    hydratePage(planPages[planPage]);
+    requestFitZoom();
+    render(true);
+    saveState();
+  }
+
+  function renderPlanPages() {
+    const btns = Array.from({ length: PLAN_PAGE_COUNT }, (_, i) => {
+      const on = i === planPage ? "on" : "";
+      return `<button type="button" class="ghost ${on}" data-rp="plan-page" data-id="${i}" aria-pressed="${on ? "true" : "false"}">${i + 1}</button>`;
+    }).join("");
+    return `<div class="rp-plan-pages" role="tablist" aria-label="${t("쿨기 페이지", "CD page")}">
+      <span>${t("페이지", "Page")}</span>
+      ${btns}
+    </div>`;
   }
 
   /** WCL HPS 상위 로그 패널 */
@@ -265,6 +418,48 @@
     return basePhases(boss).length ? segmentOf(sec, phaseStartsFor(boss)) : -1;
   }
 
+  function eventSpellKey(ev) {
+    return Number(ev.spellId) > 0 ? Number(ev.spellId) : String(ev.name || ev.id);
+  }
+
+  /**
+   * 스킬이 나온 카탈로그 구간. 바로 앞 구간에도 있으면(전환 직후 루프가 이어지면)
+   * 그 구간은 홈이 아님. 한 구간 비고 다시 나오면 재개(홈).
+   */
+  function spellHomeSegments(boss, base) {
+    const present = new Map();
+    (boss.events || []).forEach((ev) => {
+      if (ev.id === "fight-end" || ev.type === "phase") return;
+      const key = eventSpellKey(ev);
+      const k = segmentOf(Number(ev.t) || 0, base);
+      if (!present.has(key)) present.set(key, new Set());
+      present.get(key).add(k);
+    });
+    const homes = new Map();
+    present.forEach((segs, key) => {
+      const home = new Set();
+      [...segs]
+        .sort((a, b) => a - b)
+        .forEach((k) => {
+          if (!home.has(k - 1)) home.add(k);
+        });
+      homes.set(key, home);
+    });
+    return homes;
+  }
+
+  function eventHomeK(ev, base, homes) {
+    const catalogK = segmentOf(Number(ev.t) || 0, base);
+    if (!ev || ev.id === "fight-end" || ev.type === "phase") return catalogK;
+    const home = homes.get(eventSpellKey(ev));
+    if (!home || home.has(catalogK)) return catalogK;
+    let best = null;
+    home.forEach((h) => {
+      if (h < catalogK && (best == null || h > best)) best = h;
+    });
+    return best == null ? catalogK : best;
+  }
+
   /**
    * 소속 페이즈가 우리 타임라인에서 이미 끝난 뒤(다음 페이즈 시작 이후)이거나 전투 종료 뒤인 배치 판정.
    * 삭제하지 않고 숨겨 두었다가 페이즈가 길어지면 다시 보이게 함
@@ -273,10 +468,13 @@
     const boss = rawBoss(id);
     if (!boss) return () => false;
     const starts = basePhases(boss).length ? phaseStartsFor(boss) : [];
-    const end = adjustBoss(boss).duration;
+    const adjusted = adjustBoss(boss);
+    const end = adjusted.duration;
+    const staleIds = new Set(adjusted.staleIds || []);
     return (a) => {
       const sec = Number(a.t) || 0;
       if (sec > end) return true;
+      if (a.eventId && staleIds.has(a.eventId)) return true;
       const k = Number.isInteger(a.ph) && a.ph < starts.length ? a.ph : segmentOf(sec, starts);
       const next = starts[k + 1];
       return next != null && sec >= next;
@@ -312,22 +510,44 @@
     const key = `${boss.id}|${starts.join(",")}`;
     const hit = adjustedBossCache.get(boss.id);
     if (hit?.key === key && hit.src === boss) return hit.boss;
+    const homes = spellHomeSegments(boss, base);
     let end = Number(boss.duration) || 0;
     const events = [];
+    const staleIds = [];
     (boss.events || []).forEach((ev) => {
       const t0 = Number(ev.t) || 0;
-      // 전환을 여는 기술이 기준 시각보다 1~3초 먼저 찍히는 경우가 있어 다음 구간으로 묶음
-      const { t: t1, k } = shiftBySegments(t0, base, starts, 3);
-      const next = starts[k + 1];
-      // 앞 페이즈가 당겨져 끝난 뒤의 기술은 실제로 나오지 않으므로 숨김
-      if (ev.id !== "fight-end" && next != null && t1 >= next) return;
-      const out = { ...ev, t: Math.max(0, Math.round(t1)) };
-      // Viserio 의 Phase Change 태그 기술은 실제 전환선이 따로 있으므로 일반 기술 행으로 표시
+      const catalogK = segmentOf(t0, base);
+      const homeK = eventHomeK(ev, base, homes);
+      const leaked = homeK < catalogK;
+      const isTransitionSkill = ev.type === "phase" && !isPullEvent(ev);
+      let t1;
+      let k;
+      if (leaked) {
+        // 이전 페이즈 루프는 다음 페이즈 선에 묶지 않고 원래 시계에 둔다
+        t1 = t0;
+        k = homeK;
+      } else {
+        const shifted = shiftBySegments(t0, base, starts, isTransitionSkill ? 3 : 0);
+        t1 = shifted.t;
+        k = shifted.k;
+      }
+      const boundary = leaked ? starts[catalogK] : starts[k + 1];
+      const stale = ev.id !== "fight-end" && boundary != null && t1 >= boundary;
+      if (stale) {
+        if (ev.id) staleIds.push(ev.id);
+        return;
+      }
+      const out = {
+        ...ev,
+        t: Math.max(0, Math.round(t1)),
+        t0,
+        homeK,
+      };
       if (out.type === "phase" && !isPullEvent(out)) out.type = "transition";
       if (ev.id === "fight-end") end = out.t;
       events.push(out);
     });
-    const adjusted = { ...boss, events, duration: Math.max(end, (starts[starts.length - 1] || 0) + 30) };
+    const adjusted = { ...boss, events, duration: Math.max(end, (starts[starts.length - 1] || 0) + 30), staleIds };
     adjustedBossCache.set(boss.id, { key, src: boss, boss: adjusted });
     return adjusted;
   }
@@ -484,6 +704,7 @@
     }).filter(Boolean);
     localBench = [];
     rosterMode = "demo";
+    pruneAssignmentsToRoster();
   }
 
   function importHelperRoster() {
@@ -504,7 +725,36 @@
     });
     localBench = [];
     rosterMode = "helper";
+    activeRaidId = null;
+    pruneAssignmentsToRoster();
+    dropUnusableAssignments();
     return true;
+  }
+
+  function dropUnusableAssignments() {
+    const keep = (a) => {
+      const member = findRosterMember(a.playerId);
+      const spell = spellById(a.spellId);
+      return Boolean(member && spell && memberProvides(member, spell));
+    };
+    assignments = assignments.filter(keep);
+    Object.keys(assignmentsByBoss).forEach((k) => {
+      assignmentsByBoss[k] = (assignmentsByBoss[k] || []).filter(keep);
+    });
+    planPages.forEach((p) => {
+      if (!p?.assignmentsByBoss) return;
+      Object.keys(p.assignmentsByBoss).forEach((k) => {
+        p.assignmentsByBoss[k] = (p.assignmentsByBoss[k] || []).filter(keep);
+      });
+    });
+  }
+
+  function isTempRaid() {
+    return rosterMode === "helper" && !activeRaidId;
+  }
+
+  function tempRaidLabel() {
+    return t("임시 공대", "Temporary raid");
   }
 
   function findRosterMember(playerId) {
@@ -628,7 +878,7 @@
 
   /** 그리드용: 네임드별 majorSpellIds / major 플래그만 (없으면 전체) */
   function planGridSkillEvents(boss) {
-    const skills = planSkillEvents(boss?.events || []);
+    const skills = planSkillEvents(boss?.events || []).filter((ev) => !ev.stale);
     const ids = Array.isArray(boss?.majorSpellIds) ? boss.majorSpellIds.map(Number) : [];
     if (ids.length) {
       const set = new Set(ids);
@@ -754,6 +1004,23 @@
 
   function clampZoom(v) {
     return Math.max(0.5, Math.min(12, Math.round(v * 10) / 10));
+  }
+
+  function requestFitZoom() {
+    fitAfterRender = true;
+  }
+
+  function applyFitZoomAfterLayout() {
+    if (!fitAfterRender) return;
+    fitAfterRender = false;
+    requestAnimationFrame(() => {
+      const prev = zoom;
+      fitZoom();
+      if (Math.abs(zoom - prev) > 0.04) {
+        renderCd();
+        saveState();
+      }
+    });
   }
 
   /** 가로 스크롤이 안 생기는 최대 배율 (.rp-time min-width = label + w + 48) */
@@ -1090,7 +1357,7 @@
         const mark = nick ? nick.slice(0, 1) : playerCallsign(player).slice(0, 1);
         const accent = player?.color || classColor(player.class);
         const label = assignLabel(a);
-        return `<div class="rp-assign icon-only fine ${on ? "on" : ""}" role="button" tabindex="0" data-rp="assign" data-fine="1" data-id="${a.id}" style="--class:${accent};${fineChipStyle(a, anchor)}" title="${escapeAttr(label + " · " + fmtTime(a.t) + " · " + t("좌우 드래그 ±10초", "Drag ±10s"))}">
+        return `<div class="rp-assign icon-only fine ${on ? "on" : ""}" role="button" tabindex="0" data-rp="assign" data-fine="1" data-id="${a.id}" style="--class:${accent};${fineChipStyle(a, anchor)}" title="${escapeAttr(label + " · " + fmtTime(a.t))}">
           ${spellThumb(sp, mark)}
         </div>`;
       })
@@ -1279,7 +1546,6 @@
       if (!raw) return;
       const data = JSON.parse(raw);
       tool = data.tool === "board" ? "board" : "cd";
-      cdView = !GRID_ENABLED || data.cdView === "timeline" ? "timeline" : "grid";
       bossId = data.bossId || bossId;
       const knownBosses = catalog()?.bosses || [];
       if (knownBosses.length && !knownBosses.some((b) => b.id === bossId)) {
@@ -1293,72 +1559,70 @@
         data.collapsedCats && typeof data.collapsedCats === "object" ? data.collapsedCats : {};
       rosterOpen = data.rosterOpen === true;
       rosterMode = data.rosterMode || rosterMode;
-      localRoster = Array.isArray(data.localRoster)
-        ? data.localRoster.map((m) => ({
-            ...m,
-            nick: m.nick || "",
-            server: normalizeRealm(m.server),
-          }))
-        : localRoster;
-      localBench = Array.isArray(data.localBench)
-        ? data.localBench.map((m) => ({
-            ...m,
-            nick: m.nick || "",
-            server: normalizeRealm(m.server),
-          }))
-        : [];
-      const cleanAssigns = (list) =>
-        Array.isArray(list)
-          ? list.filter(
-              (a) => a.spellId && a.spellId !== "bloodlust" && a.eventId !== "pull" && spellById(a.spellId)
-            )
+      activeRaidId = data.activeRaidId || null;
+      const storedRoster = Array.isArray(data.localRoster) ? data.localRoster : null;
+      const autoDemo =
+        rosterMode === "demo" &&
+        data.demoKept !== true &&
+        storedRoster &&
+        storedRoster.length > 0 &&
+        storedRoster.every((m) => String(m.playerId || "").startsWith("demo-"));
+      if (autoDemo) {
+        rosterMode = "empty";
+        localRoster = [];
+        localBench = [];
+        activeRaidId = null;
+      } else {
+        localRoster = Array.isArray(data.localRoster)
+          ? data.localRoster.map((m) => ({
+              ...m,
+              nick: m.nick || "",
+              server: normalizeRealm(m.server),
+            }))
+          : localRoster;
+        localBench = Array.isArray(data.localBench)
+          ? data.localBench.map((m) => ({
+              ...m,
+              nick: m.nick || "",
+              server: normalizeRealm(m.server),
+            }))
           : [];
-      assignmentsByBoss = {};
-      if (data.assignmentsByBoss && typeof data.assignmentsByBoss === "object") {
-        Object.entries(data.assignmentsByBoss).forEach(([k, list]) => {
-          assignmentsByBoss[k] = cleanAssigns(list);
-        });
-      } else if (Array.isArray(data.assignments)) {
-        assignmentsByBoss[data.bossId || bossId] = cleanAssigns(data.assignments);
       }
-      assignments = assignmentsByBoss[bossId] || [];
-      delete assignmentsByBoss[bossId];
-      assignmentsBossId = bossId;
-      boardsByBoss = {};
-      if (data.boardsByBoss && typeof data.boardsByBoss === "object") {
-        boardsByBoss = { ...data.boardsByBoss };
-      } else if (data.board && Array.isArray(data.board.steps)) {
-        // 구버전: 보스 공용 보드 → 마지막으로 보던 보스의 보드로 이관
-        boardsByBoss[data.bossId || bossId] = {
-          steps: data.board.steps,
-          stepId: data.board.stepId,
-          mapId: data.board.mapId || null,
-        };
+      if (autoDemo) {
+        planPages = normalizePages(null);
+        planPage = 0;
+        hydratePage(blankPlanPage());
+      } else {
+        applyPagesFromPlan(data);
       }
-      boardBossId = null;
-      syncBossBoard();
       if (data.board) {
         boardTool = data.board.tool && data.board.tool !== "pan" ? data.board.tool : "select";
         boardColor = data.board.color || boardColor;
       }
+      if (autoDemo) saveState();
     } catch (_) {
       /* ignore broken cache */
     }
   }
 
   function saveState() {
+    if (shareReadonly) return;
     clearTimeout(persistTimer);
     persistTimer = setTimeout(() => {
+      snapshotCurrentPage();
       const payload = {
-        version: 1,
+        version: 2,
         tool,
-        cdView,
         bossId,
         duration,
         zoom,
         collapsedCats,
         rosterOpen,
         rosterMode,
+        demoKept: rosterMode === "demo",
+        activeRaidId,
+        pageIndex: planPage,
+        pages: planPages,
         localRoster,
         localBench,
         assignmentsByBoss: { ...assignmentsByBoss, [assignmentsBossId]: assignments },
@@ -1370,18 +1634,397 @@
       } catch (_) {
         /* quota */
       }
+      scheduleRaidPersist();
     }, 120);
   }
 
-  function mount(getLang, getRoster) {
+  function slimMember(m) {
+    return {
+      playerId: m.playerId,
+      class: m.class,
+      spec: m.spec,
+      role: m.role,
+      nick: m.nick || "",
+      server: memberRealm(m),
+    };
+  }
+
+  function hydrateMember(raw, i, prefix) {
+    if (!raw) return null;
+    const found = specs().find((s) => s.class === raw.class && s.spec === raw.spec);
+    if (!found) return null;
+    return {
+      ...found,
+      playerId: raw.playerId || `${prefix}-${i}`,
+      nick: raw.nick || "",
+      server: normalizeRealm(raw.server),
+    };
+  }
+
+  function hydrateMembers(list, prefix) {
+    return (list || []).map((m, i) => hydrateMember(m, i, prefix)).filter(Boolean);
+  }
+
+  function currentPlanSnapshot() {
+    snapshotCurrentPage();
+    return {
+      version: 2,
+      bossId,
+      zoom,
+      collapsedCats,
+      tool,
+      pageIndex: planPage,
+      pages: planPages,
+      localRoster: localRoster.map(slimMember),
+      localBench: localBench.map(slimMember),
+      assignmentsByBoss: { ...assignmentsByBoss, [assignmentsBossId]: assignments },
+      boardsByBoss: { ...boardsByBoss, [boardBossId || bossId]: { steps, stepId, mapId: boardMapId } },
+    };
+  }
+
+  function applyPlanSnapshot(plan, membersFallback) {
+    const data = plan && typeof plan === "object" ? plan : {};
+    const rosterSrc = Array.isArray(data.localRoster) && data.localRoster.length ? data.localRoster : membersFallback;
+    localRoster = hydrateMembers(rosterSrc, "raid");
+    localBench = hydrateMembers(data.localBench, "bench");
+    rosterMode = "saved";
+    if (data.bossId) bossId = data.bossId;
+    const knownBosses = catalog()?.bosses || [];
+    if (knownBosses.length && !knownBosses.some((b) => b.id === bossId)) bossId = knownBosses[0].id;
+    if (data.collapsedCats && typeof data.collapsedCats === "object") collapsedCats = data.collapsedCats;
+    if (data.tool === "board" || data.tool === "cd") tool = data.tool;
+    applyPagesFromPlan(data);
+    const boss = currentBoss();
+    if (boss) duration = boss.duration;
+    requestFitZoom();
+  }
+
+  function applySavedRaid(raid) {
+    if (!raid) return false;
+    applyPlanSnapshot(raid.plan, raid.members);
+    activeRaidId = raid.id;
+    return true;
+  }
+
+  function boardShareSnapshot() {
+    syncBossBoard();
+    return {
+      version: 1,
+      bossId,
+      boardsByBoss: { ...boardsByBoss, [boardBossId || bossId]: { steps, stepId, mapId: boardMapId } },
+      roster: localRoster.map(slimMember),
+      bench: localBench.map(slimMember),
+    };
+  }
+
+  function applySharePayload(payload) {
+    const data = payload && typeof payload === "object" ? payload : {};
+    shareReadonly = true;
+    tool = "board";
+    rosterOpen = false;
+    rosterEditId = null;
+    rosterMode = "saved";
+    if (data.bossId) bossId = data.bossId;
+    const knownBosses = catalog()?.bosses || [];
+    if (knownBosses.length && !knownBosses.some((b) => b.id === bossId)) bossId = knownBosses[0].id;
+    localRoster = hydrateMembers(data.roster, "share");
+    localBench = hydrateMembers(data.bench, "share-bench");
+    boardsByBoss = data.boardsByBoss && typeof data.boardsByBoss === "object" ? { ...data.boardsByBoss } : {};
+    boardBossId = null;
+    assignments = [];
+    assignmentsByBoss = {};
+    assignmentsBossId = bossId;
+    selectedAssignId = null;
+    selectedObjIds.clear();
+    stamp = null;
+    boardTool = "select";
+    syncBossBoard();
+    const boss = currentBoss();
+    if (boss) duration = boss.duration;
+  }
+
+  async function loadBoardShare(id) {
+    shareReadonly = true;
+    shareModal = null;
+    shareInfo = { id, title: "", author: "", loading: true, error: null };
+    tool = "board";
+    render(true);
+    try {
+      const res = await fetch(`/api/board-shares/${encodeURIComponent(id)}`, { credentials: "same-origin" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.share?.payload) {
+        shareInfo = {
+          id,
+          title: "",
+          author: "",
+          loading: false,
+          error: t("공유 링크를 찾지 못했습니다.", "This share link was not found."),
+        };
+        render(true);
+        return;
+      }
+      applySharePayload(data.share.payload);
+      shareInfo = {
+        id: data.share.id || id,
+        title: data.share.title || t("오더 그림판", "Order Board"),
+        author: data.share.author || "",
+        loading: false,
+        error: null,
+      };
+    } catch (_) {
+      shareInfo = {
+        id,
+        title: "",
+        author: "",
+        loading: false,
+        error: t("공유 보드를 불러오지 못했습니다.", "Could not load the shared board."),
+      };
+    }
+    render(true);
+  }
+
+  async function createBoardShare() {
+    if (shareReadonly || shareBusy) return;
+    if (!global.RaidStore?.isLoggedIn()) {
+      window.alert(t("로그인하면 열람 링크를 만들 수 있습니다.", "Log in to create a view-only link."));
+      return;
+    }
+    shareBusy = true;
+    renderBoardChrome();
+    try {
+      const res = await fetch("/api/board-shares", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({
+          title: activeRaidName() || t("오더 그림판", "Order Board"),
+          payload: boardShareSnapshot(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        window.alert(t("로그인하면 열람 링크를 만들 수 있습니다.", "Log in to create a view-only link."));
+        return;
+      }
+      if (res.status === 413) {
+        window.alert(t("그림판 내용이 너무 커서 공유할 수 없습니다.", "The board is too large to share."));
+        return;
+      }
+      if (!res.ok || !data.share?.id) {
+        window.alert(t("링크를 만들지 못했습니다.", "Could not create the link."));
+        return;
+      }
+      const url = `${location.origin}/planner/share/${encodeURIComponent(data.share.id)}`;
+      shareModal = { url, copied: null };
+      copyText(url).then((ok) => {
+        if (!shareModal) return;
+        shareModal.copied = ok;
+        renderBoardChrome();
+      });
+    } catch (_) {
+      window.alert(t("링크를 만들지 못했습니다.", "Could not create the link."));
+    } finally {
+      shareBusy = false;
+      renderBoardChrome();
+    }
+  }
+
+  function renderShareModal() {
+    if (!shareModal) return "";
+    const copiedNote =
+      shareModal.copied === true
+        ? `<div class="rp-wcl-ok">${t("클립보드에 복사했습니다", "Copied to clipboard")}</div>`
+        : shareModal.copied === false
+          ? `<div class="rp-wcl-err">${t("자동 복사 실패 · 아래 주소를 직접 복사하세요", "Auto copy failed · copy the address below")}</div>`
+          : "";
+    return `<div class="rp-modal-back" data-rp="share-close"></div>
+    <div class="rp-nsrt-modal" role="dialog" aria-label="${t("열람 링크", "View link")}">
+      <div class="rp-wcl-pop-h">
+        <div class="rp-wcl-pop-title"><b>${t("열람용 링크", "View-only link")}</b><span>${t(
+          "받은 사람은 그림판만 볼 수 있고 수정할 수 없습니다",
+          "Recipients can view the board but cannot edit it"
+        )}</span></div>
+        <button type="button" class="ghost rp-wcl-pop-x" data-rp="share-close" title="${t("닫기", "Close")}">✕</button>
+      </div>
+      ${copiedNote}
+      <input class="rp-share-url" readonly value="${escapeAttr(shareModal.url)}">
+      <div class="rp-nsrt-acts">
+        <button type="button" class="primary" data-rp="share-copy">${t("다시 복사", "Copy again")}</button>
+      </div>
+    </div>`;
+  }
+
+  async function refreshSavedRaids() {
+    if (!global.RaidStore?.isLoggedIn()) {
+      savedRaids = [];
+      return;
+    }
+    try {
+      savedRaids = await global.RaidStore.list();
+      if (activeRaidId && !savedRaids.some((r) => r.id === activeRaidId)) {
+        /* keep id until user picks another; list may still be catching up */
+      }
+    } catch {
+      savedRaids = [];
+    }
+  }
+
+  function scheduleRaidPersist() {
+    if (shareReadonly) return;
+    if (!activeRaidId || !global.RaidStore?.isLoggedIn() || raidBusy) return;
+    clearTimeout(raidSaveTimer);
+    raidSaveTimer = setTimeout(() => {
+      persistActiveRaid({ quiet: true });
+    }, 700);
+  }
+
+  async function persistActiveRaid(opts) {
+    const quiet = opts?.quiet;
+    if (!global.RaidStore?.isLoggedIn()) {
+      if (!quiet) window.alert(t("로그인하면 내 공대를 저장할 수 있습니다.", "Log in to save your raids."));
+      return null;
+    }
+    const name =
+      opts?.name ||
+      savedRaids.find((r) => r.id === (opts?.id || activeRaidId))?.name ||
+      t("내 공대", "My raid");
+    const id = opts?.asNew ? undefined : opts?.id || activeRaidId || undefined;
+    raidBusy = true;
+    try {
+      const saved = await global.RaidStore.save({
+        id,
+        name,
+        size: 20,
+        members: localRoster.map(slimMember),
+        plan: currentPlanSnapshot(),
+      });
+      activeRaidId = saved.id;
+      await refreshSavedRaids();
+      if (!quiet) {
+        window.alert(t("이 공대의 구성·쿨기·오더를 저장했습니다.", "Saved roster, cooldowns, and order board."));
+      }
+      return saved;
+    } catch (err) {
+      if (!quiet) {
+        window.alert(
+          err.status === 409
+            ? t("내 공대는 최대 10개입니다. 하나를 지운 뒤 저장하세요.", "You can keep up to 10 raids. Delete one first.")
+            : t("저장에 실패했습니다.", "Save failed.")
+        );
+      }
+      return null;
+    } finally {
+      raidBusy = false;
+    }
+  }
+
+  async function loadSavedRaid(id) {
+    if (!id) return;
+    if (activeRaidId && activeRaidId !== id && global.RaidStore?.isLoggedIn()) {
+      await persistActiveRaid({ quiet: true, id: activeRaidId });
+    }
+    const raid = await global.RaidStore.get(id);
+    if (!raid) {
+      window.alert(t("공대를 불러오지 못했습니다.", "Could not load that raid."));
+      return;
+    }
+    applySavedRaid(raid);
+    render(true);
+    saveState();
+  }
+
+  function activeRaidName() {
+    if (isTempRaid()) return tempRaidLabel();
+    return savedRaids.find((r) => r.id === activeRaidId)?.name || "";
+  }
+
+  function raidPickOptions() {
+    const temp = isTempRaid()
+      ? `<option value="${TEMP_RAID_ID}" selected>${escapeAttr(`${tempRaidLabel()} (${localRoster.length})`)}</option>`
+      : "";
+    const saved = savedRaids
+      .map(
+        (r) =>
+          `<option value="${escapeAttr(r.id)}" ${r.id === activeRaidId ? "selected" : ""}>${escapeAttr(
+            `${r.name} (${(r.members && r.members.length) || r.size || 0})`
+          )}</option>`
+      )
+      .join("");
+    return `<option value="">${t("공대 선택", "Choose a raid")}</option>${temp}${saved}`;
+  }
+
+  function renderRaidLibrary() {
+    const logged = Boolean(global.RaidStore?.isLoggedIn());
+    const n = savedRaids.length;
+    const max = global.RaidStore?.MAX || 10;
+    const loginHref = global.RaidAuth?.loginHref?.() || "";
+    const canPreview = Boolean(global.RaidAuth?.canPreview?.());
+    const options = raidPickOptions();
+    const loginBit = logged
+      ? `<span class="rp-raid-count">${n}/${max}</span>`
+      : `<span class="rp-raid-login">${t("로그인하면 내 공대 저장 · 최대 10개", "Log in to save up to 10 raids")}${
+          loginHref
+            ? ` · <a href="${loginHref}">Battle.net</a>`
+            : canPreview
+              ? ` · <button type="button" class="ghost" data-rp="raid-login">${t("로그인", "Log in")}</button>`
+              : ""
+        }</span>`;
+    return `<div class="rp-raid-lib">
+      <div class="rp-raid-lib-row">
+        <label>
+          <span>${t("내 공대", "My raids")}</span>
+          <select data-rp="raid-pick" ${logged ? "" : "disabled"}>${options}</select>
+        </label>
+        ${renderPlanPages()}
+        <button type="button" class="primary" data-rp="raid-save" ${logged ? "" : "disabled"}>${t("저장", "Save")}</button>
+        <button type="button" class="ghost" data-rp="raid-save-new" ${logged ? "" : "disabled"}>${t("새로 저장", "Save as")}</button>
+        <button type="button" class="danger" data-rp="raid-delete" ${logged && activeRaidId ? "" : "disabled"}>${t("삭제", "Delete")}</button>
+      </div>
+      <div class="rp-raid-lib-note">${loginBit}</div>
+    </div>`;
+  }
+
+  function renderPlanSlot() {
+    const logged = Boolean(global.RaidStore?.isLoggedIn());
+    const options = raidPickOptions();
+    return `<div class="rp-plan-slot">
+      <label>
+        <span>${t("공대", "Raid")}</span>
+        <select data-rp="raid-pick" ${logged ? "" : "disabled"}>${options}</select>
+      </label>
+      ${renderPlanPages()}
+    </div>`;
+  }
+
+  function mount(getLang, getRoster, opts) {
     langRef = getLang || (() => "ko");
     helperRosterRef = getRoster || (() => []);
+    const shareId = String(opts?.shareId || "").trim();
     if (!bound) {
       bound = true;
-      loadState();
-      if (!localRoster.length) buildDemoRoster();
+      if (!shareId) loadState();
       if (!boardBossId) syncBossBoard();
+      if (!shareId) requestFitZoom();
       bindRoot();
+      refreshSavedRaids().then(() => {
+        if (rosterOpen && !shareReadonly) renderCd();
+      });
+    }
+    if (shareId) {
+      if (activeShareId !== shareId) {
+        activeShareId = shareId;
+        ensureShell(true);
+        loadBoardShare(shareId);
+        return;
+      }
+    } else if (activeShareId) {
+      activeShareId = null;
+      shareReadonly = false;
+      shareInfo = null;
+      shareModal = null;
+      loadState();
+      if (!boardBossId) syncBossBoard();
+      requestFitZoom();
     }
     ensureShell(true);
     render(true);
@@ -1451,6 +2094,14 @@
     document.addEventListener("pointerup", onPhaseDragUp);
     document.addEventListener("pointercancel", onPhaseDragUp);
     document.addEventListener("keydown", onKey);
+    const onAuth = () => {
+      refreshSavedRaids().then(() => {
+        const view = document.getElementById("plannerView");
+        if (view && !view.classList.contains("hidden")) render(true);
+      });
+    };
+    document.addEventListener("raid:auth", onAuth);
+    if (global.RaidAuth?.onChange) global.RaidAuth.onChange(onAuth);
   }
 
   /** 페이즈 전환선 드래그. 놓을 때 한 번만 적용(보스 스킬·쿨기 이동), 드래그 중엔 선만 이동 */
@@ -1614,6 +2265,10 @@
   /** 타임라인 스킬 줄 위에 커서를 올리면: 커서 ±10초 안의 보스 스킬을 커서 위 작은 바로 */
   function onLaneHover(e) {
     if (fineDrag) return;
+    if (e.target.closest?.(".rp-tl-mark, .rp-boss-mark, .rp-assign")) {
+      hideLaneHover();
+      return;
+    }
     const lane = e.target.closest?.(".rp-track-lane[data-rp='lane']");
     if (!lane) {
       if (laneHoverKey) hideLaneHover();
@@ -1732,8 +2387,31 @@
     if (!btn) return;
     const act = btn.dataset.rp;
     const id = btn.dataset.id;
+    if (act === "share-close") {
+      shareModal = null;
+      renderBoardChrome();
+      return;
+    }
+    if (act === "share-copy") {
+      if (!shareModal?.url) return;
+      copyText(shareModal.url).then((ok) => {
+        if (!shareModal) return;
+        shareModal.copied = ok;
+        renderBoardChrome();
+      });
+      return;
+    }
+    if (act === "board-share") {
+      createBoardShare();
+      return;
+    }
+    if (shareReadonly) {
+      const allowed = new Set(["tool-board", "boss-pick", "step", "share-close", "share-copy"]);
+      if (!allowed.has(act)) return;
+    }
     if (act === "tool-cd") {
       tool = "cd";
+      requestFitZoom();
       render(true);
       document.getElementById("plannerView")?.scrollIntoView({ block: "start" });
       return;
@@ -1747,24 +2425,61 @@
     if (act === "import-helper") {
       if (!importHelperRoster()) {
         window.alert(t("구인 도우미에 전문화가 없습니다. 먼저 공대를 짜거나 데모 로스터를 쓰세요.", "Helper roster is empty. Build one first, or use the demo roster."));
+      } else {
+        rosterOpen = true;
       }
       render(true);
+      saveState();
       return;
     }
     if (act === "demo-roster") {
       buildDemoRoster();
       render(true);
+      saveState();
       return;
     }
-    if (act === "cd-grid") {
-      if (!GRID_ENABLED) return;
-      cdView = "grid";
-      render(true);
+    if (act === "raid-login") {
+      global.RaidAuth?.previewLogin?.();
       return;
     }
-    if (act === "cd-timeline") {
-      cdView = "timeline";
-      render(true);
+    if (act === "raid-save") {
+      if (!global.RaidStore?.isLoggedIn()) {
+        window.alert(t("로그인하면 내 공대를 저장할 수 있습니다.", "Log in to save your raids."));
+        return;
+      }
+      if (!activeRaidId) {
+        const fallback = t(`내 공대 ${savedRaids.length + 1}`, `Raid ${savedRaids.length + 1}`);
+        const name = window.prompt(t("공대 이름", "Raid name"), fallback);
+        if (!name) return;
+        persistActiveRaid({ asNew: true, name: name.trim().slice(0, 80) }).then(() => renderCd());
+        return;
+      }
+      persistActiveRaid().then(() => renderCd());
+      return;
+    }
+    if (act === "raid-save-new") {
+      if (!global.RaidStore?.isLoggedIn()) {
+        window.alert(t("로그인하면 내 공대를 저장할 수 있습니다.", "Log in to save your raids."));
+        return;
+      }
+      const fallback = t(`내 공대 ${savedRaids.length + 1}`, `Raid ${savedRaids.length + 1}`);
+      const name = window.prompt(t("공대 이름", "Raid name"), fallback);
+      if (!name) return;
+      persistActiveRaid({ asNew: true, name: name.trim().slice(0, 80) }).then(() => renderCd());
+      return;
+    }
+    if (act === "raid-delete") {
+      if (!activeRaidId) return;
+      const nm = activeRaidName() || t("이 공대", "this raid");
+      if (!window.confirm(t(`"${nm}" 을(를) 삭제할까요? 쿨기·오더도 같이 지워집니다.`, `Delete "${nm}"? Cooldown plans and order boards will be removed.`))) return;
+      const id = activeRaidId;
+      global.RaidStore.remove(id).then(() => {
+        if (activeRaidId === id) activeRaidId = null;
+        refreshSavedRaids().then(() => {
+          renderCd();
+          saveState();
+        });
+      });
       return;
     }
     if (act === "zoom-in") {
@@ -1831,6 +2546,13 @@
     if (act === "toggle-roster") {
       rosterOpen = !rosterOpen;
       if (!rosterOpen) rosterEditId = null;
+      if (rosterOpen) {
+        refreshSavedRaids().then(() => {
+          renderCd();
+          saveState();
+        });
+        return;
+      }
       renderCd();
       saveState();
       return;
@@ -1877,6 +2599,10 @@
       renderCd();
       return;
     }
+    if (act === "plan-page") {
+      setPlanPage(Number(btn.dataset.id));
+      return;
+    }
     if (act === "boss-pick") {
       const next = btn.dataset.id;
       if (!next || next === bossId) return;
@@ -1884,6 +2610,7 @@
       syncBossAssignments();
       const boss = currentBoss();
       duration = boss?.duration || duration;
+      requestFitZoom();
       render(true);
       return;
     }
@@ -1988,12 +2715,6 @@
       }
       return;
     }
-    if (act === "wcl-toggle") {
-      wclOpen = !wclOpen;
-      wclError = null;
-      renderCd();
-      return;
-    }
     if (act === "wcl-player") {
       const player = activeRoster().find((m) => m.playerId === btn.dataset.player);
       if (player) openWclPick(player, btn.getBoundingClientRect());
@@ -2027,7 +2748,6 @@
     }
     if (act === "wcl-apply-all") {
       if (wclLoading) return;
-      wclOpen = true;
       wclApplyAllTop();
       return;
     }
@@ -2122,7 +2842,14 @@
       syncBossAssignments();
       const boss = currentBoss();
       duration = boss?.duration || duration;
+      requestFitZoom();
       render(true);
+      return;
+    }
+    if (e.target.dataset.rp === "raid-pick") {
+      const id = e.target.value;
+      if (!id || id === TEMP_RAID_ID) return;
+      loadSavedRaid(id);
       return;
     }
     if (e.target.dataset.rp === "server") {
@@ -2133,6 +2860,7 @@
   }
 
   function onInput(e) {
+    if (shareReadonly) return;
     if (e.target.id === "rpNotes") {
       const step = currentStep();
       if (step) step.notes = e.target.value;
@@ -2205,6 +2933,31 @@
     }
     const tag = (e.target.tagName || "").toLowerCase();
     if (tag === "input" || tag === "textarea" || tag === "select" || e.target.isContentEditable) return;
+
+    if (shareReadonly) {
+      if (tool !== "board") return;
+      if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+        e.preventDefault();
+        const i = Math.max(0, steps.findIndex((s) => s.id === stepId));
+        const next = steps[Math.min(steps.length - 1, i + 1)];
+        if (next && next.id !== stepId) {
+          stepId = next.id;
+          renderBoardChrome();
+          drawBoard();
+        }
+      }
+      if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
+        e.preventDefault();
+        const i = Math.max(0, steps.findIndex((s) => s.id === stepId));
+        const prev = steps[Math.max(0, i - 1)];
+        if (prev && prev.id !== stepId) {
+          stepId = prev.id;
+          renderBoardChrome();
+          drawBoard();
+        }
+      }
+      return;
+    }
 
     if (tool === "cd") {
       if (e.key === "Escape") {
@@ -2344,6 +3097,10 @@
   function updateBoardCursor(overObj) {
     const canvas = document.getElementById("rpCanvas");
     if (!canvas) return;
+    if (shareReadonly) {
+      canvas.style.cursor = "default";
+      return;
+    }
     let cur = "crosshair";
     if (erasing || boardTool === "eraser") {
       cur = "cell";
@@ -2477,11 +3234,20 @@
     const root = document.getElementById("plannerView");
     if (!root) return;
     ensureShell(false);
-    $("#rpTitle", root).textContent = t("레이드 플래너", "Raid Planner");
-    $("#rpSub", root).textContent = t(
-      "공대 쿨기 짜기와 오더 그림판을 한 페이지에서 관리합니다. 아이콘·정확한 쿨타임은 API 연동 후 자동 반영됩니다.",
-      "Plan raid cooldowns and draw orders in one page. Icons and exact timers will come from the API later."
-    );
+    $("#rpTitle", root).textContent = shareReadonly
+      ? t("오더 그림판 · 열람", "Order Board · View")
+      : t("레이드 플래너", "Raid Planner");
+    $("#rpSub", root).textContent = shareReadonly
+      ? shareInfo?.error
+        ? shareInfo.error
+        : shareInfo?.loading
+          ? t("공유 보드를 불러오는 중…", "Loading shared board…")
+          : [shareInfo?.title, shareInfo?.author ? t(`${shareInfo.author} 공유`, `Shared by ${shareInfo.author}`) : ""]
+              .filter(Boolean)
+              .join(" · ")
+      : "";
+    root.querySelector(".rp-shell")?.classList.toggle("rp-share-view", shareReadonly);
+    if (shareReadonly) tool = "board";
     $("#rpBossLbl", root).textContent = t("보스", "Boss");
     const raid = catalog().raid;
     const raidLabel = raid
@@ -2489,11 +3255,13 @@
         ? `${raid.nameKo} (${raid.patch})`
         : `${raid.name} (${raid.patch})`
       : catalog().source;
-    $("#rpBanner", root).textContent = t(`데이터 소스 · ${raidLabel}`, `Data source · ${raidLabel}`);
+    $("#rpBanner", root).textContent = raidLabel || "";
     $("#rpTabCd", root).textContent = t("공대 쿨기 짜기", "Cooldown Plan");
     $("#rpTabBoard", root).textContent = t("오더 그림판", "Order Board");
     $("#rpTabCd", root).classList.toggle("on", tool === "cd");
     $("#rpTabBoard", root).classList.toggle("on", tool === "board");
+    $("#rpTabCd", root).classList.toggle("hidden", shareReadonly);
+    $("#rpTabCd", root).disabled = shareReadonly;
 
     const bossSel = $("#rpBoss", root);
     const prev = bossSel.value;
@@ -2538,6 +3306,14 @@
         .join("");
     }
 
+    if (shareReadonly) {
+      $("#rpCd", root).classList.add("hidden");
+      $("#rpBoard", root).classList.remove("hidden");
+      document.querySelector(".app")?.classList.add("rp-fit-board");
+      window.scrollTo(0, 0);
+      renderBoard(force);
+      return;
+    }
     $("#rpCd", root).classList.toggle("hidden", tool !== "cd");
     $("#rpBoard", root).classList.toggle("hidden", tool !== "board");
     document.querySelector(".app")?.classList.toggle("rp-fit-board", tool === "board");
@@ -2627,7 +3403,6 @@
           ${memberIconHtml(m)}
           <div>
             <b>${memberLabel(m)}</b>
-            <div class="sub">${t("닉네임·서버 설정", "Set nickname & realm")}</div>
           </div>
         </div>
         <label class="rp-member-edit-field">${t("닉네임", "Nickname")}
@@ -2698,7 +3473,6 @@
       <div class="rp-roster-add-h">
         <h4>${t("전문화 추가", "Add spec")}</h4>
       </div>
-      <div class="sub">${t("클릭하면 선발에 추가 · 20명 초과 시 미참", "Click to add · overflow goes to sit-out")}</div>
       <div class="rp-roster-add-list">${groups}</div>
     </aside>`;
   }
@@ -2708,15 +3482,7 @@
     const dpsN = counts.Melee + counts.Ranged;
     const roles = ["Tank", "Melee", "Ranged", "Heal"];
 
-    const rail = `<aside class="rp-roster-side collapsed" aria-label="${t("공대 구성", "Raid roster")}">
-      <button type="button" class="rp-roster-toggle" data-rp="toggle-roster" title="${t("공대 구성 열기", "Open roster")}">
-        <span class="rp-roster-toggle-ico">▸</span>
-        <span class="rp-roster-toggle-label">${t("공대", "Raid")}</span>
-        <em>${roster.length}</em>
-      </button>
-    </aside>`;
-
-    if (!rosterOpen) return rail;
+    if (!rosterOpen) return "";
 
     const columns = roles
       .map((r) => {
@@ -2734,7 +3500,7 @@
 
     const benchSlots = localBench.length
       ? localBench.map((m) => renderRosterSlot(m, "bench")).join("")
-      : `<div class="empty">${t("미참 없음 · 선발에서 드래그", "Empty · drag from active")}</div>`;
+      : `<div class="empty">${t("미참 없음", "None")}</div>`;
 
     const pop = `<div class="rp-roster-pop" data-rp="roster-backdrop">
       <div class="rp-roster-modal panel with-add" role="dialog" aria-modal="true" aria-label="${t("공대 구성", "Raid roster")}">
@@ -2742,12 +3508,12 @@
           <div class="rp-roster-side-h">
             <div>
               <h3>${t("공대 구성", "Raid roster")}</h3>
-              <div class="sub">${t("칸 클릭 → 닉·서버 · 호버 시 이름-서버 · 드래그로 미참/삭제", "Click slot → nick/realm · hover name-realm · drag sit-out/delete")}</div>
             </div>
             <div class="rp-roster-side-acts">
               <button type="button" class="primary rp-roster-collapse" data-rp="toggle-roster">${t("닫고 작업하기", "Close & work")}</button>
             </div>
           </div>
+          ${renderRaidLibrary()}
           <div class="headcount rp-roster-hc">
             <div class="headcount-main">${t("선발", "Active")} <em>${roster.length}</em> / 20 · ${t("미참", "Sit-out")} <em>${localBench.length}</em></div>
             <div class="headcount-roles">${roleLabel("Tank")} ${counts.Tank}/2 · ${roleLabel("Heal")} ${counts.Heal}/4~5 · DPS ${dpsN}</div>
@@ -2764,7 +3530,6 @@
             </div>
             <div class="rp-roster-trash" data-drop="trash" data-rp="roster-trash">
               <strong>${t("나간 공대원 삭제", "Remove leavers")}</strong>
-              <span>${t("여기로 드래그하면 삭제됩니다", "Drop here to delete")}</span>
             </div>
           </div>
         </div>
@@ -2773,7 +3538,7 @@
       </div>
     </div>`;
 
-    return rail + pop;
+    return pop;
   }
 
 
@@ -2815,50 +3580,20 @@
     return best;
   }
 
-  function renderWclBulk() {
-    const groups = rosterSpecGroups();
-    const estSec = Math.max(5, Math.ceil(groups.length / 3) * 6);
-    const bulkBtn = `<button type="button" class="primary rp-wcl-all-btn" data-rp="wcl-apply-all" ${
-      wclLoading || !groups.length ? "disabled" : ""
-    }>${
-      wclBulk && wclLoading
-        ? t(`가져오는 중… ${wclBulk.done}/${wclBulk.total}`, `Fetching… ${wclBulk.done}/${wclBulk.total}`)
-        : t("전체 공대원 1등 로그 한번에 반영", "Apply #1 logs for whole raid")
-    }</button>`;
-    const note = `<div class="rp-wcl-all-note">${t(
-      `로스터의 전문화 ${groups.length}개 각각 이 보스 1등 로그(힐러=HPS, 그 외=DPS)에서 쿨기 시점을 가져와 같은 전문화 공대원 모두에게 배치합니다. 약 ${estSec}초 정도 걸리니 끝날 때까지 기다려 주세요. 해당 공대원들의 기존 같은 스킬 배치는 교체됩니다.`,
-      `Fetches each of ${groups.length} roster specs' #1 log on this boss (healers=HPS, others=DPS) and places their cooldowns for every member of that spec. Takes ~${estSec}s. Existing placements of those spells are replaced.`
-    )}</div>`;
-    let progress = "";
-    if (wclBulk) {
-      const pct = wclBulk.total ? Math.round((wclBulk.done / wclBulk.total) * 100) : 0;
-      const results = wclBulk.results
-        .map(
-          (r) =>
-            `<li class="${r.ok ? "ok" : "bad"}"><b>${escapeAttr(r.label)}</b>${
-              r.ok
-                ? `<span>${t(`${r.rank || 1}등`, `#${r.rank || 1}`)} ${escapeAttr(r.name)} · ${t("배치", "placed")} ${r.placed}${
-                    r.phased ? ` · ${t("페이즈 기준", "phase-relative")}` : ""
-                  }${
-                    r.skipped
-                      ? ` · ${t(`앞 순위 ${r.skipped}개 건너뜀(익명/페이즈 기록 없음)`, `skipped ${r.skipped} (anon/no phases)`)}`
-                      : ""
-                  }</span>`
-                : `<span>${escapeAttr(r.error)}</span>`
-            }</li>`
-        )
-        .join("");
-      progress = `<div class="rp-wcl-progress">
-        <div class="rp-wcl-progress-bar"><i style="width:${pct}%"></i></div>
-        ${
-          wclLoading && wclBulk.current.length
-            ? `<div class="rp-wcl-progress-now">${t("진행 중", "Working")}: ${wclBulk.current.map(escapeAttr).join(", ")}</div>`
-            : ""
-        }
-        ${results ? `<ul class="rp-wcl-progress-list">${results}</ul>` : ""}
-      </div>`;
-    }
-    return `<div class="rp-wcl-all">${bulkBtn}${note}${progress}</div>`;
+  function helpTip(ko, en) {
+    const tip = t(ko, en);
+    return `<span class="rp-help-q" tabindex="0" aria-label="${escapeAttr(tip)}"><span aria-hidden="true">?</span><span class="rp-help-tip" role="tooltip">${escapeAttr(tip)}</span></span>`;
+  }
+
+  function wclAutoAssignHelp() {
+    return helpTip(
+      "공대원들의 주요 쿨기를 WCL 1등 힐러들의 로그로 복제합니다",
+      "Copies each member's major cooldowns from the #1 WCL healer logs"
+    );
+  }
+
+  function wclAutoAssignLabel() {
+    return t("생존기 자동배정", "Auto-assign CDs");
   }
 
   /** 보스 전환 열 이름. 반복되는 페이즈는 회차 표시 */
@@ -2875,38 +3610,17 @@
   }
 
   function renderWclPanel() {
-    if (!wclOpen) {
-      return `<div class="rp-wcl-bar">
-        <button type="button" class="primary" data-rp="wcl-apply-all" ${wclLoading ? "disabled" : ""}>${t(
-          "전체 1등 로그 반영",
-          "Apply #1 for all"
-        )}</button>
-        <span class="rp-wcl-note">${t(
-          "캐릭터 이름 옆 WCL 버튼 = 그 전문화 상위 10 로그 (킬 타임·페이즈 시각) 보고 골라서 반영",
-          "WCL button next to each character = pick from that spec's top 10 logs (kill time · phase starts)"
-        )}</span>
-      </div>`;
-    }
-    return `<section class="rp-wcl-panel panel">
-      <div class="rp-wcl-panel-h">
-        <div>
-          <h3>${t("전체 1등 로그 반영", "Apply #1 for all")}</h3>
-          <div class="sub">${t(
-            "개별 로그는 캐릭터 이름 옆 WCL 버튼에서 상위 10 중 골라 반영",
-            "Pick individual logs from the WCL button next to each character"
-          )}</div>
-        </div>
-        <button type="button" class="ghost" data-rp="wcl-toggle">${t("닫기", "Close")}</button>
+    return `<div class="rp-wcl-bar">
+      <div class="rp-wcl-assign-act">
+        <button type="button" class="primary" data-rp="wcl-apply-all" ${wclLoading ? "disabled" : ""}>${
+          wclBulk && wclLoading
+            ? t(`가져오는 중… ${wclBulk.done}/${wclBulk.total}`, `Fetching… ${wclBulk.done}/${wclBulk.total}`)
+            : wclAutoAssignLabel()
+        }</button>
+        ${wclAutoAssignHelp()}
       </div>
-      ${renderWclBulk()}
-      ${
-        !currentWclEncounterId()
-          ? `<div class="rp-wcl-warn">${t("이 보스의 WCL Encounter ID가 없습니다.", "Missing WCL Encounter ID for this boss.")}</div>`
-          : ""
-      }
       ${wclError ? `<div class="rp-wcl-err">${escapeAttr(wclError)}</div>` : ""}
-      ${wclStatus ? `<div class="rp-wcl-ok">${escapeAttr(wclStatus)}</div>` : ""}
-    </section>`;
+    </div>`;
   }
 
   const WCL_TOP_N = 10;
@@ -3100,51 +3814,40 @@
     }
     const starts = phaseStartsFor(boss);
     const ov = phaseOverrides[boss.id];
-    const per = ov?.info?.per || [];
     const encId = currentWclEncounterId();
     const inputs = starts
       .map((sec, i) => {
         const lbl = phaseLabel(boss, i);
-        const st = per[i];
         const changed = sec !== Number(base[i].t);
-        const hint = st?.topAvg != null || st?.bottomAvg != null
-          ? t(
-              `상위 ${st.topAvg != null ? fmtTime(st.topAvg) : "-"} · 하위 ${st.bottomAvg != null ? fmtTime(st.bottomAvg) : "-"}`,
-              `top ${st.topAvg != null ? fmtTime(st.topAvg) : "-"} · bottom ${st.bottomAvg != null ? fmtTime(st.bottomAvg) : "-"}`
-            )
-          : t(`기본 ${fmtTime(base[i].t)}`, `base ${fmtTime(base[i].t)}`);
-        return `<div class="rp-phase-item ${changed ? "changed" : ""}" title="${escapeAttr(
-          t(`기본(Viserio) ${fmtTime(base[i].t)}`, `Base (Viserio) ${fmtTime(base[i].t)}`)
-        )}">
+        return `<div class="rp-phase-item ${changed ? "changed" : ""}">
           <span class="rp-phase-name">${escapeAttr(t(lbl.ko, lbl.en))}</span>
           <input data-rp="phase-input" data-idx="${i}" value="${fmtTime(sec)}" inputmode="numeric" aria-label="${escapeAttr(
             t(`${lbl.ko} 시작 시각`, `${lbl.en} start`)
           )}">
-          <em>${escapeAttr(hint)}</em>
         </div>`;
       })
       .join("");
-    const srcNote = !ov
-      ? t("기본값 (Viserio 타임라인)", "Base (Viserio timeline)")
-      : ov.source === "wcl"
-        ? t(
-            `WCL 킬 로그 상위 ${ov.info?.topN || 0} · 하위 ${ov.info?.bottomN || 0} 평균`,
-            `WCL kills top ${ov.info?.topN || 0} · bottom ${ov.info?.bottomN || 0} avg`
-          )
-        : t("수동 조정", "Manual");
     return `<div class="rp-phase-bar">
-      <b>${t("페이즈 전환", "Phase transitions")}</b>
+      <span class="rp-wcl-assign-act rp-phase-title">
+        <b>${t("페이즈 전환", "Phase transitions")}</b>
+        ${helpTip(
+          "이 네임드는 딜에 따라서 페이즈 전환 시간이 달라지는 네임드 입니다. 본인 공대 시간에 맞게 설정 하신뒤 쿨기를 배정하시면 됩니다.",
+          "This boss's phase times change with raid DPS. Set them to match your raid, then assign cooldowns."
+        )}
+      </span>
       <div class="rp-phase-items">${inputs}</div>
       <div class="rp-phase-acts">
-        <button type="button" class="primary" data-rp="phase-sync" ${phaseSyncing || !encId ? "disabled" : ""}>${
-          phaseSyncing ? t("동기화 중… (10~20초)", "Syncing… (10–20s)") : t("페이즈 동기화", "Sync phases")
-        }</button>
+        <span class="rp-wcl-assign-act">
+          <button type="button" class="primary" data-rp="phase-sync" ${phaseSyncing || !encId ? "disabled" : ""}>${
+            phaseSyncing ? t("동기화 중… (10~20초)", "Syncing… (10–20s)") : t("페이즈 동기화", "Sync phases")
+          }</button>
+          ${helpTip(
+            "WCL 킬 로그 상위·하위 10개의 페이즈 전환 시각을 평균내 이 보스에 맞춥니다",
+            "Averages phase times from the top and bottom 10 WCL kills and applies them to this boss"
+          )}
+        </span>
         <button type="button" class="ghost" data-rp="phase-reset" ${ov ? "" : "disabled"}>${t("기본값", "Reset")}</button>
       </div>
-      <span class="rp-phase-note">${escapeAttr(srcNote)} · ${t(
-        "동기화 = WCL 킬 속도 상위 10 · 하위 10 로그의 전환 시각 평균. 바꾸면 이후 보스 스킬과 배치한 쿨기가 함께 이동합니다.",
-        "Sync = avg transition time of WCL top 10 + bottom 10 kills. Boss abilities and your cooldowns after it move together."
-      )}</span>
       ${phaseSyncError ? `<div class="rp-wcl-err">${escapeAttr(phaseSyncError)}</div>` : ""}
     </div>`;
   }
@@ -3228,12 +3931,15 @@
       renderCd();
     });
     const okN = wclBulk.results.filter((r) => r.ok).length;
-    const placedN = wclBulk.results.reduce((n, r) => n + r.placed, 0);
-    wclStatus = t(
-      `전체 반영 완료 · 전문화 ${okN}/${groups.length} · 배치 ${placedN}개`,
-      `Bulk apply done · specs ${okN}/${groups.length} · ${placedN} placed`
-    );
     wclLoading = false;
+    wclOpen = false;
+    wclBulk = null;
+    wclStatus = "";
+    if (!okN) {
+      wclError = t("생존기 자동배정에 실패했습니다.", "Auto-assign failed.");
+    } else {
+      wclError = null;
+    }
     saveState();
     renderCd();
   }
@@ -3422,11 +4128,7 @@
                   .join("")}<th></th></tr></thead>
                 <tbody>${body}</tbody>
               </table></div>
-              ${pick.phasesLoading ? `<div class="rp-wcl-pop-note">${t("페이즈 시각 불러오는 중…", "Loading phase times…")}</div>` : ""}
-              <div class="rp-wcl-pop-note">${t(
-                `반영 = 그 로그의 쿨기 시점을 이 캐릭터에게만 페이즈 기준으로 배치 · 페이즈 빨강=우리보다 빠름, 파랑=느림`,
-                `Apply = place that log's cooldowns on this character only (phase-relative) · red = earlier, blue = later`
-              )}</div>`
+              ${pick.phasesLoading ? `<div class="rp-wcl-pop-note">${t("페이즈 시각 불러오는 중…", "Loading phase times…")}</div>` : ""}`
             : pick.error
               ? ""
               : `<div class="rp-wcl-pop-empty">${t("랭킹 없음", "No rankings")}</div>`
@@ -3503,7 +4205,7 @@
 
   /** 클릭 이벤트 안에서 바로 호출해야 함 (execCommand 는 사용자 동작 직후에만 허용) */
   async function copyText(text) {
-    const ta = document.querySelector(".rp-nsrt-text");
+    const ta = document.querySelector(".rp-nsrt-text, .rp-share-url");
     if (ta) {
       ta.focus();
       ta.select();
@@ -3567,10 +4269,6 @@
       })()}
       <textarea class="rp-nsrt-text" readonly spellcheck="false">${escapeAttr(text)}</textarea>
       <div class="rp-nsrt-acts">
-        <span class="rp-wcl-pop-note">${t(
-          "게임에서 /nsrt → Reminders → 공유(Shared) 또는 개인(Personal) 노트 → Import 에 붙여넣기 · 회색(페이즈 시간차) 쿨기는 제외",
-          "In game: /nsrt → Reminders → Shared or Personal notes → Import and paste · grey (phase gap) cooldowns excluded"
-        )}</span>
         <button type="button" class="primary" data-rp="nsrt-copy">${t("다시 복사", "Copy again")}</button>
       </div>
     </div>`;
@@ -3580,14 +4278,13 @@
     const box = document.getElementById("rpCd");
     if (!box) return;
     const roster = activeRoster();
-    const spells = catalog().spells || [];
     const boss = currentBoss();
     const events = buildTimelineColumns(boss);
     if (wclPick && (wclPick.bossId !== bossId || !roster.some((m) => m.playerId === wclPick.playerId))) wclPick = null;
     const focusNick = document.activeElement?.dataset?.rp === "edit-nick" ? document.activeElement.dataset.id : null;
     const focusVal = focusNick ? document.activeElement.value : null;
-    const paneSel = [".rp-time-top", ".rp-time-bottom", ".rp-grid-scroll"];
-    const scrollKey = `${cdView}|${boss?.id || ""}`;
+    const paneSel = [".rp-time-top", ".rp-time-bottom"];
+    const scrollKey = `${boss?.id || ""}`;
     const keepScroll =
       cdScrollKey === scrollKey
         ? paneSel.map((sel) => {
@@ -3602,12 +4299,11 @@
         ${renderRosterSide(roster)}
         <section class="panel rp-main">
           <div class="rp-main-head">
-            <div class="g-screen-tabs">
-              <button class="g-screen-tab ${cdView === "grid" ? "on" : ""}" data-rp="cd-grid" ${GRID_ENABLED ? "" : `disabled title="${t("준비 중", "Coming soon")}"`}>${t("그리드", "Grid")}</button>
-              <button class="g-screen-tab ${cdView === "timeline" ? "on" : ""}" data-rp="cd-timeline">${t("타임라인", "Timeline")}</button>
-            </div>
+            ${renderPlanSlot()}
             <div class="rp-main-acts">
-              <button class="ghost" data-rp="toggle-roster">${t("공대 구성", "Roster")} (${roster.length})</button>
+              <button class="ghost" data-rp="toggle-roster">${t("공대 구성", "Roster")} (${roster.length}${
+                activeRaidName() ? ` · ${escapeAttr(activeRaidName())}` : ""
+              })</button>
               <div class="rp-zoom-acts">
                 <button class="ghost" data-rp="zoom-out" title="${t("축소", "Zoom out")}">−</button>
                 <span class="rp-zoom-label">${zoom}px/s</span>
@@ -3617,37 +4313,23 @@
               ${(() => {
                 const n = countCooldownOverlaps();
                 return n
-                  ? `<span class="rp-clash-badge" title="${escapeAttr(
-                      t("같은 스킬을 쿨타임 안에 다시 배치한 곳 (빨간 빗금)", "Same spell placed again within its cooldown (red hatch)")
-                    )}">⚠ ${t(`쿨 겹침 ${n}건`, `${n} CD overlap${n > 1 ? "s" : ""}`)}</span>`
+                  ? `<span class="rp-clash-badge">⚠ ${t(`쿨 겹침 ${n}건`, `${n} CD overlap${n > 1 ? "s" : ""}`)}</span>`
                   : "";
               })()}
               ${(() => {
                 const n = assignments.length - visibleAssignments().length;
                 return n
-                  ? `<span class="rp-hidden-badge" title="${escapeAttr(
-                      t(
-                        "소속 페이즈가 우리 타임라인에서 먼저 끝나 쓸 수 없는 쿨기 (회색 표시). 쿨 계산에서 빠지며, 그 페이즈를 늘리면 다시 사용됩니다",
-                        "Cooldowns that can't be used because their phase ends earlier on this timeline (grey). Excluded from CD checks; lengthen the phase to use them"
-                      )
-                    )}">${t(`페이즈 시간차로 못 씀 ${n}`, `${n} unusable (phase gap)`)}</span>`
+                  ? `<span class="rp-hidden-badge">${t(`페이즈 시간차로 못 씀 ${n}`, `${n} unusable (phase gap)`)}</span>`
                   : "";
               })()}
-              <button class="primary" data-rp="nsrt-export" title="${escapeAttr(
-                t("이 보스 배치를 Northern Sky Raid Tools 리마인더 노트로 바꿔 복사", "Copy this boss plan as a Northern Sky Raid Tools reminder note")
-              )}">${t("NSRT 내보내기", "Export NSRT")}</button>
+              <button class="primary" data-rp="nsrt-export">${t("NSRT 내보내기", "Export NSRT")}</button>
               <button class="danger" data-rp="clear-assigns">${t("배치 초기화", "Clear plan")}</button>
             </div>
           </div>
 
-          <div class="rp-hint">${t(
-            "왼쪽/상단에서 공대 구성 열기 · 평소엔 접고 작업 · 좌클릭 배치 · 칸 우클릭 삭제 · 아이콘 드래그 ±10초",
-            "Open roster from left/top · keep collapsed while planning · LMB place · RMB remove · drag ±10s"
-          )}</div>
           ${renderWclPanel()}
           ${renderPhaseBar()}
-          ${cdView === "grid" ? renderBossStrip(events) : ""}
-          <div class="rp-board-wrap">${cdView === "grid" ? renderGrid(events, spells) : renderTimeline(events)}</div>
+          <div class="rp-board-wrap">${renderTimeline(events)}</div>
         </section>
       </div>
       ${renderWclPick()}
@@ -3678,6 +4360,7 @@
       }
     }
     refreshWowheadTips();
+    applyFitZoomAfterLayout();
   }
 
   function roleLabel(r) {
@@ -3688,42 +4371,46 @@
   const ROLE_ORDER = { Tank: 0, Heal: 1, Melee: 2, Ranged: 3 };
 
   function sortedRoster(list) {
+    const loc = langRef() === "ko" ? "ko" : "en";
     return [...(list || [])].sort((a, b) => {
       const ra = ROLE_ORDER[a.role] ?? 99;
       const rb = ROLE_ORDER[b.role] ?? 99;
       if (ra !== rb) return ra - rb;
-      const ca = String(a.class || "").localeCompare(String(b.class || ""));
+      const ca = String(a.class || "").localeCompare(String(b.class || ""), "en");
       if (ca) return ca;
-      return String(playerCallsign(a)).localeCompare(String(playerCallsign(b)), langRef() === "ko" ? "ko" : "en");
+      const sa = String(a.spec || "").localeCompare(String(b.spec || ""), "en");
+      if (sa) return sa;
+      return String(playerCallsign(a)).localeCompare(String(playerCallsign(b)), loc);
     });
   }
 
-  function spellThumb(sp, letter) {
+  function spellThumb(sp, letter, opts) {
     const icon = global.RaidPlannerAPI.getSpellIcon(sp);
     const ch = letter || spellName(sp).slice(0, 1);
     const img = icon ? `<img src="${icon}" alt="">` : `<i>${ch}</i>`;
-    return wowheadWrap(sp?.spellId, img);
+    return wowheadWrap(sp?.spellId, img, opts);
   }
 
   function wowheadDomain() {
     return langRef() === "ko" ? "ko" : "www";
   }
 
-  function wowheadWrap(spellId, innerHtml) {
+  function wowheadWrap(spellId, innerHtml, opts) {
     const id = Number(spellId);
     if (!id) return innerHtml;
+    if (opts && opts.tip === false) return `<span class="rp-wh">${innerHtml}</span>`;
     const domain = wowheadDomain();
     const href = `https://www.wowhead.com/${domain === "ko" ? "ko/" : ""}spell=${id}`;
     const tip = domain === "ko" ? `spell=${id}&domain=ko` : `spell=${id}`;
     return `<a class="rp-wh" href="${href}" data-wowhead="${tip}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${innerHtml}</a>`;
   }
 
-  function iconWithTooltip(spellId, iconUrl, className) {
+  function iconWithTooltip(spellId, iconUrl, className, opts) {
     const cls = className ? ` class="${className}"` : "";
     const img = iconUrl
       ? `<img${cls} src="${escapeAttr(iconUrl)}" alt="" loading="lazy">`
       : `<i${cls}></i>`;
-    return wowheadWrap(spellId, img);
+    return wowheadWrap(spellId, img, opts);
   }
 
   function refreshWowheadTips() {
@@ -3781,7 +4468,7 @@
         `WCL 상위 ${wclPhaseByBoss[boss.id].topCount} · 하위 ${wclPhaseByBoss[boss.id].bottomCount} 평균`,
         `WCL top ${wclPhaseByBoss[boss.id].topCount} · bottom ${wclPhaseByBoss[boss.id].bottomCount} avg`
       )) ||
-      t("이름은 행 · 열은 시간 · 주요 스킬만", "Names on rows · time columns · majors only");
+      "";
 
     const head = (columns || []).map(renderColumnHead).join("");
     const body = rows
@@ -3815,7 +4502,7 @@
           ${portrait ? `<img class="rp-boss-portrait" src="${escapeAttr(portrait)}" alt="">` : ""}
           <div>
             <h3>${escapeAttr(bossName || t("네임드 스킬", "Boss abilities"))}</h3>
-            <div class="sub">${phaseNote}</div>
+            ${phaseNote ? `<div class="sub">${phaseNote}</div>` : ""}
           </div>
         </div>
       </div>
@@ -3837,7 +4524,7 @@
     </section>`;
   }
 
-  function assignChip(a, compact) {
+  function assignChip(a, compact, opts) {
     const sp = spellById(a.spellId);
     if (!sp) return "";
     const player = activeRoster().find((m) => m.playerId === a.playerId);
@@ -3848,7 +4535,7 @@
     const accent = player?.color || classColor(providerClassName(sp));
     if (compact) {
       return `<div class="rp-assign icon-only ${on ? "on" : ""}" role="button" tabindex="0" data-rp="assign" data-id="${a.id}" style="--class:${accent}" title="${label}">
-        ${spellThumb(sp, mark)}
+        ${spellThumb(sp, mark, opts)}
       </div>`;
     }
     return `<div class="rp-assign ${on ? "on" : ""}" role="button" tabindex="0" data-rp="assign" data-id="${a.id}" style="--class:${accent}" title="${label}">
@@ -3987,7 +4674,7 @@
           ? `<div class="rp-phase-vline lane ${ev.varied ? "varied" : ""}" style="left:${timeX(ev.t)}px"></div>`
           : `<div class="rp-phase-vline lane drag ${ev.varied ? "varied" : ""}" data-rp="phase-drag" data-idx="${idx}" data-phase-idx="${idx}" style="left:${timeX(
               ev.t
-            )}px" title="${escapeAttr(t("드래그해서 페이즈 시작 시각 조정 (Shift = 미세 조정)", "Drag to move phase start (Shift = fine)"))}"></div>`;
+            )}px"></div>`;
       })
       .join("");
     const allBossRows = timelineBossRows(boss);
@@ -4032,6 +4719,7 @@
         const name = langRef() === "ko" ? row.nameKo || row.name : row.name;
         let lastLabelX = -Infinity;
         const marks = row.marks
+          .filter((ev) => (Number(ev.t) || 0) <= duration)
           .map((ev) => {
             const ico = eventIconUrl(ev) || row.iconUrl;
             const sid = ev.spellId || row.spellId;
@@ -4040,7 +4728,7 @@
             if (showTime) lastLabelX = x;
             return `<div class="rp-boss-mark" data-t="${Number(ev.t) || 0}" style="left:${x}px" title="${escapeAttr(
               `${name} · ${fmtTime(ev.t)}`
-            )}">${ico ? iconWithTooltip(sid, ico) : wowheadWrap(sid, "<i></i>")}${
+            )}">${ico ? iconWithTooltip(sid, ico, "", { tip: false }) : wowheadWrap(sid, "<i></i>", { tip: false })}${
               showTime ? `<em>${fmtTime(ev.t)}</em>` : ""
             }</div>`;
           })
@@ -4071,9 +4759,7 @@
         const idx = phaseIdxOf(ev);
         const dragAttrs =
           idx == null ? "" : `data-rp="phase-drag" data-idx="${idx}" data-phase-idx="${idx}"`;
-        const tip = `${range ? `${name} · ${range}` : `${name} · ${fmtTime(ev.t)}`}${
-          idx == null ? "" : ` · ${t("드래그해서 조정 (Shift = 미세 조정)", "Drag to move (Shift = fine)")}`
-        }`;
+        const tip = range ? `${name} · ${range}` : `${name} · ${fmtTime(ev.t)}`;
         return `${band}<div class="rp-phase-vline ${idx == null ? "" : "drag"} ${ev.varied ? "varied" : ""}" ${dragAttrs} style="left:${left}px" title="${escapeAttr(
           tip
         )}">
@@ -4106,10 +4792,7 @@
         }</div>
       </div>
       </div>
-      <div class="rp-time-splitter" data-split="1" role="separator" aria-orientation="horizontal" title="${t(
-        "드래그: 보스 / 공대원 영역 크기 조절 · 더블클릭: 기본값",
-        "Drag to resize boss / raid panes · double-click to reset"
-      )}"><span></span></div>
+      <div class="rp-time-splitter" data-split="1" role="separator" aria-orientation="horizontal"><span></span></div>
       <div class="rp-time-scroll rp-time-bottom" data-pane="bottom">
       <div class="rp-time" style="${timeStyle}">
         ${cats
@@ -4199,7 +4882,7 @@
                               }`
                             )}">
                               ${durBar}
-                              ${assignChip(a, true)}
+                              ${assignChip(a, true, { tip: false })}
                               <span class="rp-tl-time">${fmtTime(a.t)}</span>
                               ${clash ? `<span class="rp-tl-clash">${t("쿨 겹침", "CD")}</span>` : ""}
                             </div>`;
@@ -4209,9 +4892,9 @@
                           .filter((a) => a.spellId === sp.id && a.playerId === player.playerId && isHidden(a))
                           .map((a) => {
                             const x = Math.min(Number(a.t) || 0, duration);
-                            const tip = `${phaseRelLabel(a.t, a.ph)} · ${hiddenReason(a)} · ${t("우클릭 삭제", "RMB remove")}`;
+                            const tip = `${phaseRelLabel(a.t, a.ph)} · ${hiddenReason(a)}`;
                             return `<div class="rp-tl-mark ghost" data-rp="ghost" data-id="${a.id}" style="left:${timeX(x)}px" title="${escapeAttr(tip)}">
-                              <div class="rp-assign icon-only">${spellThumb(sp)}</div>
+                              <div class="rp-assign icon-only">${spellThumb(sp, "", { tip: false })}</div>
                               <span class="rp-tl-time">${fmtTime(a.t)}</span>
                               <span class="rp-tl-ghost">${t("페이즈 시간차", "Phase gap")}</span>
                             </div>`;
@@ -4357,9 +5040,8 @@
             </div>
             <div class="rp-palette-bar">
               <div class="g-screen-tabs rp-palette-tabs" id="rpPaletteTabs"></div>
-              <kbd class="rp-palette-keys" title="${t("Z 이전 · X 다음", "Z prev · X next")}">Z/X</kbd>
+              <kbd class="rp-palette-keys">Z/X</kbd>
             </div>
-            <div class="sub" id="rpPaletteHint"></div>
             <div class="rp-palette" id="rpPalette"></div>
             <div class="rp-mini-acts">
               <button class="ghost" data-rp="undo">${t("실행 취소", "Undo")}</button>
@@ -4376,13 +5058,15 @@
           <aside class="panel rp-side rp-board-meta">
             <div class="rp-side-head">
               <h3>${t("스텝", "Steps")}</h3>
+              <button type="button" class="primary" data-rp="board-share">${t("열람 링크", "Share link")}</button>
               <button class="ghost" data-rp="add-step">+</button>
             </div>
             <div class="rp-steps-scroll" id="rpSteps"></div>
             <h3>${t("오더 메모", "Order notes")}</h3>
             <textarea id="rpNotes" class="rp-notes" rows="6"></textarea>
           </aside>
-        </div>`;
+        </div>
+        <div class="rp-share-host"></div>`;
       boardReady = true;
       bindCanvas();
       global.BoardAssets?.ensureMarkerSheet?.(() => {
@@ -4456,30 +5140,55 @@
         )
         .join("");
     }
-    const hint = document.getElementById("rpPaletteHint");
-    if (hint) {
-      hint.textContent =
-        paletteTab === "roster"
-          ? t("공대원을 고른 뒤 캔버스를 클릭하세요.", "Pick a member, then click the canvas.")
-          : paletteTab === "elements"
-            ? t("징표·역할 스탬프를 고른 뒤 찍으세요.", "Pick a marker/role stamp, then place it.")
-            : t("보스 쫄/네임드 이미지를 여기에 넣을 예정입니다.", "Boss add/named images will go here.");
-    }
     const palette = document.getElementById("rpPalette");
     if (palette) palette.innerHTML = renderPaletteBody();
 
-    document.getElementById("rpSteps").innerHTML = steps
-      .map((s) => {
-        const on = s.id === stepId;
-        return `<div class="rp-step ${on ? "on" : ""}">
-          <button class="rp-step-pick" data-rp="step" data-id="${s.id}"></button>
-          <input data-rp="step-name" data-id="${s.id}" value="${escapeAttr(s.name)}">
-          <button class="ghost" data-rp="del-step" data-id="${s.id}">×</button>
-        </div>`;
-      })
-      .join("");
+    const sideHead = document.querySelector("#rpBoard .rp-side-head");
+    if (sideHead) {
+      sideHead.innerHTML = shareReadonly
+        ? `<h3>${t("스텝", "Steps")}</h3>`
+        : `<h3>${t("스텝", "Steps")}</h3>
+           <button type="button" class="primary" data-rp="board-share" ${shareBusy ? "disabled" : ""}>${
+             shareBusy ? t("만드는 중…", "Creating…") : t("열람 링크", "Share link")
+           }</button>
+           <button class="ghost" data-rp="add-step">+</button>`;
+    }
+
+    const stepsBox = document.getElementById("rpSteps");
+    if (stepsBox) {
+      stepsBox.innerHTML = steps
+        .map((s) => {
+          const on = s.id === stepId;
+          if (shareReadonly) {
+            return `<div class="rp-step ${on ? "on" : ""}">
+              <button class="rp-step-pick" data-rp="step" data-id="${s.id}"></button>
+              <span class="rp-step-name">${escapeAttr(s.name)}</span>
+            </div>`;
+          }
+          return `<div class="rp-step ${on ? "on" : ""}">
+            <button class="rp-step-pick" data-rp="step" data-id="${s.id}"></button>
+            <input data-rp="step-name" data-id="${s.id}" value="${escapeAttr(s.name)}">
+            <button class="ghost" data-rp="del-step" data-id="${s.id}">×</button>
+          </div>`;
+        })
+        .join("");
+    }
     const notes = document.getElementById("rpNotes");
     if (notes && document.activeElement !== notes) notes.value = currentStep()?.notes || "";
+    if (notes) {
+      notes.readOnly = shareReadonly;
+      notes.placeholder = shareReadonly ? "" : t("이 스텝 오더를 적습니다", "Write the order for this step");
+    }
+    let shareHost = document.querySelector("#rpBoard .rp-share-host");
+    if (!shareHost) {
+      const box = document.getElementById("rpBoard");
+      if (box) {
+        shareHost = document.createElement("div");
+        shareHost.className = "rp-share-host";
+        box.appendChild(shareHost);
+      }
+    }
+    if (shareHost) shareHost.innerHTML = renderShareModal();
     updateBoardCursor();
   }
 
@@ -4498,7 +5207,7 @@
     if (paletteTab === "roster") {
       const roster = sortedRoster(activeRoster());
       if (!roster.length) {
-        return `<div class="rp-palette-empty">${t("로스터가 비어 있습니다. 데모/구인 도우미에서 불러오세요.", "Roster is empty. Import from helper or demo.")}</div>`;
+        return `<div class="rp-palette-empty">${t("로스터가 비어 있습니다.", "Roster is empty.")}</div>`;
       }
       return `<div class="rp-stamp-grid roster">${roster
         .map((m) => {
@@ -4570,7 +5279,6 @@
     if (!units.length) {
       return `<div class="rp-palette-empty">
         <p>${t("이 보스의 쫄·네임드 이미지가 아직 없습니다.", "No add/named images for this boss yet.")}</p>
-        <p class="sub">${t("구한 이미지를 assets/bosses/ 아래에 넣고 board-assets.js 의 BOSS_UNITS에 등록하면 됩니다.", "Drop images under assets/bosses/ and register them in BOSS_UNITS.")}</p>
       </div>`;
     }
     return `<div class="rp-stamp-grid boss">${units
@@ -5138,6 +5846,7 @@
   }
 
   function onPointerDown(e) {
+    if (shareReadonly) return;
     const canvas = document.getElementById("rpCanvas");
     canvas.setPointerCapture?.(e.pointerId);
     const p = canvasPoint(e);
@@ -5578,6 +6287,33 @@
     ctx.fillText("BOSS", cx, cy + 4);
   }
 
+  function memberIconKey(m) {
+    return global.BoardAssets?.playerIconUrl?.(m) || `${m?.class || ""}|${m?.spec || ""}`;
+  }
+
+  /** 선발 공대에 같은 아이콘(전문화)이 2명 이상일 때만 그림판 닉네임을 붙인다 */
+  function memberIconIsShared(player) {
+    if (!player || !localRoster.some((m) => m.playerId === player.playerId)) return false;
+    const key = memberIconKey(player);
+    let n = 0;
+    for (const m of localRoster) {
+      if (memberIconKey(m) !== key) continue;
+      n += 1;
+      if (n > 1) return true;
+    }
+    return false;
+  }
+
+  function tokenCaption(o) {
+    if (!o || o.kind === "element") return "";
+    if (o.kind === "player" || o.playerId) {
+      const player = findRosterMember(o.playerId);
+      if (!memberIconIsShared(player)) return "";
+      return playerCallsign(player);
+    }
+    return o.label || "";
+  }
+
   function drawObj(ctx, o, selected) {
     ctx.save();
     ctx.strokeStyle = o.color || "#f2b84b";
@@ -5696,15 +6432,16 @@
         ctx.stroke();
       }
       ctx.restore();
-      if (o.label && o.kind !== "element") {
+      const caption = tokenCaption(o);
+      if (caption) {
         ctx.font = "700 10px sans-serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
         ctx.lineWidth = 3;
         ctx.strokeStyle = "#0b1017";
         ctx.fillStyle = "#eff5fc";
-        ctx.strokeText(o.label, o.x, o.y + r + 3);
-        ctx.fillText(o.label, o.x, o.y + r + 3);
+        ctx.strokeText(caption, o.x, o.y + r + 3);
+        ctx.fillText(caption, o.x, o.y + r + 3);
       }
     }
     if (selected && selectedObjIds.size === 1 && canTransform(o)) {
@@ -5717,11 +6454,11 @@
 
   function importFromHelper() {
     const ok = importHelperRoster();
-    if (ok) {
-      render(true);
-      saveState();
-    }
-    return ok;
+    if (!ok) return false;
+    rosterOpen = true;
+    render(true);
+    saveState();
+    return true;
   }
 
   global.RaidPlanner = {

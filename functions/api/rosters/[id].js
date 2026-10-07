@@ -16,9 +16,10 @@ export async function onRequestPut(context) {
   const user = await getUserFromRequest(env.DB, request);
   if (!user) return json({ error: "unauthorized" }, 401);
   const body = await request.json().catch(() => ({}));
-  const roster = await saveRoster(env.DB, user.id, { ...body, id: params.id });
-  if (!roster) return json({ error: "not_found" }, 404);
-  return json({ roster });
+  const result = await saveRoster(env.DB, user.id, { ...body, id: params.id });
+  if (result?.error === "limit") return json({ error: "limit" }, 409);
+  if (result?.error === "not_found" || !result?.roster) return json({ error: "not_found" }, 404);
+  return json({ roster: result.roster });
 }
 
 export async function onRequestDelete(context) {

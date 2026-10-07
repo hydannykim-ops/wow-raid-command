@@ -480,7 +480,12 @@
       nameKo: "매장된 파수꾼",
       duration: 480,
       /** 이 타임라인 기준 페이즈 전환 (id = WCL 페이즈 번호) */
-      phases: [{ t: 46, id: 2 }, { t: 56, id: 1 }, { t: 147, id: 2 }, { t: 156, id: 1 }, { t: 248, id: 2 }, { t: 258, id: 1 }],
+      phases: [
+        { t: 46, id: 2 }, { t: 56, id: 1 },
+        { t: 147, id: 2 }, { t: 156, id: 1 },
+        { t: 248, id: 2 }, { t: 258, id: 1 },
+        { t: 349, id: 2 }, { t: 359, id: 1 },
+      ],
       iconUrl: bossIcon("golems"),
       /**
        * Mythic: Viserio bossTimeline
@@ -601,7 +606,12 @@
       nameKo: "길 잃은 탐험가",
       duration: 480,
       /** 이 타임라인 기준 페이즈 전환 (id = WCL 페이즈 번호) */
-      phases: [{ t: 63, id: 4 }, { t: 122, id: 1 }, { t: 182, id: 2 }, { t: 241, id: 1 }],
+      phases: [
+        { t: 63, id: 4 }, { t: 122, id: 1 },
+        { t: 182, id: 2 }, { t: 241, id: 1 },
+        { t: 306, id: 3 }, { t: 364, id: 1 },
+        { t: 429, id: 4 },
+      ],
       iconUrl: bossIcon("tortollans"),
       /**
        * Mythic: Viserio bossTimeline
@@ -871,7 +881,11 @@
       nameKo: "스조라크",
       duration: 420,
       /** 이 타임라인 기준 페이즈 전환 (id = WCL 페이즈 번호) */
-      phases: [{ t: 100, id: 2 }, { t: 125, id: 1 }, { t: 227, id: 2 }, { t: 251, id: 1 }],
+      phases: [
+        { t: 100, id: 2 }, { t: 125, id: 1 },
+        { t: 227, id: 2 }, { t: 251, id: 1 },
+        { t: 354, id: 2 }, { t: 379, id: 1 },
+      ],
       iconUrl: bossIcon("brute"),
       /**
        * Mythic: Viserio bossTimeline
@@ -1033,7 +1047,7 @@
       order: 7,
       name: "The Coiled Altar",
       nameKo: "똬리의 제단",
-      duration: 450,
+      duration: 617,
       /** 이 타임라인 기준 페이즈 전환 (id = WCL 페이즈 번호) */
       phases: [{ t: 164, id: 2 }, { t: 375, id: 3 }, { t: 410, id: 4 }],
       iconUrl: bossIcon("zuljanmalacrass"),
@@ -1164,7 +1178,7 @@
         ev({ id: "dreadmarch-9", t: 614, name: "Dreadmarch", nameKo: "공포의 행진", type: "add", spellId: 1285643, iconUrl: "https://wowutils.com/viserio-cooldowns/images/boss-abilities/the-coiled-altar/1285643.jpg" }),
         ev({ id: "defilement-of-the-coiled-alt-3", t: 617, name: "Defilement of the Coiled Altar", nameKo: "똬리의 제단의 오염", type: "damage", spellId: 1298381, iconUrl: "https://wowutils.com/viserio-cooldowns/images/boss-abilities/the-coiled-altar/1298381.jpg" }),
         ev({ id: "toxic-deluge-11", t: 617, name: "Toxic Deluge", nameKo: "유독한 폭우", type: "movement", spellId: 1299960, iconUrl: "https://wowutils.com/viserio-cooldowns/images/boss-abilities/the-coiled-altar/1299960.jpg" }),
-        ev({ id: "fight-end", t: 450, name: "Fight End", nameKo: "전투 종료", type: "enrage", icon: "achievement_bg_killxenemies_generalsroom" }),
+        ev({ id: "fight-end", t: 617, name: "Fight End", nameKo: "전투 종료", type: "enrage", icon: "achievement_bg_killxenemies_generalsroom" }),
       ],
     },
     {

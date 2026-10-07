@@ -63,25 +63,29 @@ const T = {
   ko: {
     title: "WoW 레이드 구인 도우미",
     homeTitle: "레이드 커맨드",
-    homeSub: "필요한 도구를 골라 들어가세요.",
-    enter: "들어가기",
+    homeSub: "공대 구성, 쿨기, 오더를 나눠 두었습니다.",
+    enter: "열기",
     backHome: "명령 본부로",
     settingsLabel: "설정",
     langLabel: "언어",
     factionLabel: "진영",
     helperTab: "구인 도우미",
-    helperDesc: "시너지를 맞추며 공대 구성을 짜는 곳입니다.",
+    helperDesc: "빠진 시너지를 보면서 자리를 채웁니다.",
     plannerTab: "레이드 플래너",
-    plannerDesc: "쿨기와 오더를 타임라인에 배치합니다.",
+    plannerDesc: "보스 타임라인에 생존기와 오더를 올립니다.",
     plannerTitle: "레이드 플래너",
     gameTab: "구인 Game",
-    gameDesc: "인재풀과 AI 공대가 레이스하는 시뮬레이션입니다.",
+    gameDesc: "인재풀과 AI 공대 레이스는 아직 열리지 않았습니다.",
+    gameSoonBadge: "준비중",
+    gameSoon: "구인 게임을 준비하고 있습니다.",
     plazaTab: "커뮤니티",
-    plazaDesc: "오그리마 광장을 걷고 게시판에 들어갑니다.",
+    plazaDesc: "광장과 게시판은 아직 열리지 않았습니다.",
+    plazaSoonBadge: "준비중",
+    plazaSoon: "오그리마 광장과 게시판을 준비하고 있습니다.",
     plazaTitle: "커뮤니티",
     specTitle: "전문화 선택",
     specSub: "전문화를 클릭해 파티에 추가하거나 제거하세요.",
-    specSubAi: "AI 추천이 열린 동안 전문화를 클릭하면 신청온 사람에 올라갑니다.",
+    specSubAi: "AI도우미가 열린 동안 전문화를 클릭하면 신청온 사람에 올라갑니다.",
     search: "직업 / 전문화 검색",
     clear: "초기화",
     raidTitle: "레이드 구성",
@@ -93,25 +97,18 @@ const T = {
       "미활성 시너지에 필요한 직업이 강조됩니다. 활성 시너지는 충족 직업 색으로만 점등됩니다.",
     comingTitle: "구인 Game",
     comingSub: "1000명 인재풀과 AI 공대 10개가 레이스합니다.",
-    footer: "Cloudflare Pages + D1 · 한국어/English 전환",
-    saveRoster: "클라우드 저장",
-    loadRoster: "불러오기",
     loginBnet: "Battle.net 로그인",
     loginLocal: "로컬 테스트 로그인",
     logout: "로그아웃",
-    saveOk: "공대를 D1에 저장했습니다.",
-    saveNeedLogin: "저장하려면 로그인하세요.",
-    saveNeedMembers: "저장할 전문화가 없습니다.",
-    loadNeedPick: "불러올 공대를 선택하세요.",
-    loadOk: "저장된 공대를 불러왔습니다.",
     needJob: "필요 직업",
     coveredBy: "충족",
     celebrateTitle: "시너지 완성!",
     celebrateSub: "모든 시너지를 충족했습니다. 공대 구성 축하드립니다!",
     synComplete: "전 시너지 충족 · 구성 완료!",
-    aiRecBtn: "AI 추천 리스트",
+    aiRecBtn: "AI도우미",
+    aiHelp:
+      "현재 구인 인원수에 맞춰 추천 직업을 알려주고, 신청온 직업을 올려두면 받아도 될지 아닐지 조언을 해줍니다.",
     aiRecClose: "닫기",
-    aiTestBtn: "TEST 10명",
     planRaidTitle: "공대가 가득 찼습니다",
     planRaidSub: "이 조합으로 바로 레이드 플랜을 짤 수 있습니다.",
     planRaidBtn: "이 파티로 레이드플랜 짜러가기",
@@ -119,25 +116,29 @@ const T = {
   en: {
     title: "WoW Raid Recruiting Helper",
     homeTitle: "Raid Command",
-    homeSub: "Pick a tool and go in.",
-    enter: "Enter",
+    homeSub: "Roster, cooldowns, and callouts live in separate rooms.",
+    enter: "Open",
     backHome: "Command hub",
     settingsLabel: "Settings",
     langLabel: "Language",
     factionLabel: "Faction",
     helperTab: "Recruiting Helper",
-    helperDesc: "Build a raid roster around missing synergies.",
+    helperDesc: "Fill the raid while watching which synergies are still open.",
     plannerTab: "Raid Planner",
-    plannerDesc: "Place cooldowns and orders on the timeline.",
+    plannerDesc: "Put defensives and callouts on the boss timeline.",
     plannerTitle: "Raid Planner",
     gameTab: "Recruiting Game",
-    gameDesc: "Race AI raids with a pool of 1000 candidates.",
+    gameDesc: "The talent-pool race is still closed.",
+    gameSoonBadge: "Soon",
+    gameSoon: "The recruiting game is not open yet.",
     plazaTab: "Community",
-    plazaDesc: "Walk the plaza and step into a board.",
+    plazaDesc: "The plaza and boards are still closed.",
+    plazaSoonBadge: "Soon",
+    plazaSoon: "The plaza and boards are not open yet.",
     plazaTitle: "Community",
     specTitle: "Choose Specialization",
     specSub: "Click a specialization to add or remove it from the raid.",
-    specSubAi: "While the AI list is open, clicking a spec queues an applicant.",
+    specSubAi: "While AI Helper is open, clicking a spec queues an applicant.",
     search: "Search class / specialization",
     clear: "Clear",
     raidTitle: "Raid Roster",
@@ -149,25 +150,18 @@ const T = {
       "Inactive synergies highlight required classes. Active ones only tint with the covering class color.",
     comingTitle: "Recruiting Game",
     comingSub: "Race 10 AI raids using a pool of 1000 candidates.",
-    footer: "Cloudflare Pages + D1 · KO/EN toggle",
-    saveRoster: "Cloud save",
-    loadRoster: "Load",
     loginBnet: "Log in with Battle.net",
     loginLocal: "Local test login",
     logout: "Log out",
-    saveOk: "Roster saved to D1.",
-    saveNeedLogin: "Log in to save.",
-    saveNeedMembers: "Add specs before saving.",
-    loadNeedPick: "Choose a saved roster.",
-    loadOk: "Loaded saved roster.",
     needJob: "Required",
     coveredBy: "Covered by",
     celebrateTitle: "Synergies Complete!",
     celebrateSub: "Every raid synergy is covered. Congratulations!",
     synComplete: "All synergies covered · Ready!",
-    aiRecBtn: "AI Recommend List",
+    aiRecBtn: "AI Helper",
+    aiHelp:
+      "Suggests classes for the current raid size, and advises whether to accept a spec you queue as an applicant.",
     aiRecClose: "Close",
-    aiTestBtn: "TEST 10",
     planRaidTitle: "The raid is full",
     planRaidSub: "Take this roster into the raid planner.",
     planRaidBtn: "Plan this raid",
@@ -605,25 +599,27 @@ function mustComeAsMsg(className, specKo, specEn, rem) {
   );
 }
 
-function forcedDpsSpecMsgs(rem, covered) {
+function forcedDpsSpecMsgs(rem, covered, blocked) {
+  const skip = blocked instanceof Set ? blocked : new Set();
+  const open = (className) => !covered.has(className) && !skip.has(className);
   const msgs = [];
   if (rem.dpsLeft <= 0) return msgs;
   if (rem.healLeft === 0) {
-    if (!covered.has("Priest")) msgs.push(mustComeAsMsg("Priest", "암사", "Shadow", rem));
-    if (!covered.has("Evoker")) {
+    if (open("Priest")) msgs.push(mustComeAsMsg("Priest", "암사", "Shadow", rem));
+    if (open("Evoker")) {
       msgs.push(mustComeAsMsg("Evoker", "황폐나 증강", "Devastation / Augmentation", rem));
     }
-    if (!covered.has("Shaman")) {
+    if (open("Shaman")) {
       msgs.push(mustComeAsMsg("Shaman", "정기나 고양", "Elemental / Enhancement", rem));
     }
-    if (!covered.has("Druid")) {
+    if (open("Druid")) {
       msgs.push(
         rem.tankLeft === 0
           ? mustComeAsMsg("Druid", "야성이나 조화", "Feral / Balance", rem)
           : mustComeAsMsg("Druid", "수호나 야성이나 조화", "Guardian / Feral / Balance", rem)
       );
     }
-    if (!covered.has("Paladin")) {
+    if (open("Paladin")) {
       msgs.push(
         rem.tankLeft === 0
           ? mustComeAsMsg("Paladin", "징벌", "Retribution", rem)
@@ -631,7 +627,7 @@ function forcedDpsSpecMsgs(rem, covered) {
       );
     }
   }
-  if (covered.has("Monk")) return msgs;
+  if (!open("Monk")) return msgs;
   if (rem.tankLeft === 0 && rem.healLeft === 0) {
     msgs.push(mustComeAsMsg("Monk", "풍운", "Windwalker", rem));
   } else if (rem.tankLeft === 0) {
@@ -880,6 +876,86 @@ function meleeCapOf(size, target) {
   return target.Melee + extra;
 }
 
+const MELEE_PLAN_CLASSES = ["Rogue", "Warrior", "Monk", "Demon Hunter"];
+
+function meleeCountOf(className) {
+  let n = 0;
+  for (const s of roster) if (s.class === className && s.role === "Melee") n++;
+  return n;
+}
+
+function designatedMeleeAfter(spec) {
+  let n = 0;
+  for (const c of MELEE_PLAN_CLASSES) {
+    if (meleeCountOf(c) + (spec.class === c ? 1 : 0) > 0) n += 1;
+  }
+  if (meleeCountOf("Death Knight") + (spec.class === "Death Knight" ? 1 : 0) > 0) n += 1;
+  return n;
+}
+
+function fillsMissingClassSynergy(spec) {
+  if (classCountOf(spec.class) > 0) return false;
+  return (spec.synergies || []).some((name) => {
+    if (name === BLOODLUST_NAME) return false;
+    const syn = SY.find((s) => s.name === name);
+    return syn && !isSynergyCovered(syn);
+  });
+}
+
+function guaranteedMeleeSeat(spec) {
+  if (spec.role !== "Melee") return false;
+  if (spec.class !== "Death Knight" && !MELEE_PLAN_CLASSES.includes(spec.class)) return false;
+  return classCountOf(spec.class) === 0;
+}
+
+function raidSynergiesCovered() {
+  return SY.every((syn) => isSynergyCovered(syn));
+}
+
+function secondDeathKnight(spec) {
+  return spec.class === "Death Knight" && classCountOf("Death Knight") >= 1;
+}
+
+function meleeSeventh(spec) {
+  if (guaranteedMeleeSeat(spec)) return false;
+  if (secondDeathKnight(spec)) return true;
+  if (MELEE_PLAN_CLASSES.includes(spec.class)) return false;
+  return fillsMissingClassSynergy(spec);
+}
+
+function meleeFlexSeats(target) {
+  return Math.max(0, target.Melee - 5);
+}
+
+// 근딜 자리는 규모별 목표(20인 6, 30인 8)를 따른다.
+// 비어 있는 도적·전사·죽기·풍운·파멸은 항상 받는다.
+// 시너지가 모두 찼으면 목표 인원까지 아무 근딜이나 추천하고, 그 다음은 두 번째 죽기만 받는다.
+// 시너지가 남아 있으면 위 다섯 직업과 남은 여유 자리까지이고, 한 명 추가는 두 번째 죽기나 없는 시너지다.
+function meleeOverPlan(spec, nextMelee, target) {
+  if (guaranteedMeleeSeat(spec)) return false;
+  if (raidSynergiesCovered()) {
+    return nextMelee > target.Melee + (secondDeathKnight(spec) ? 1 : 0);
+  }
+  const allowed = designatedMeleeAfter(spec) + meleeFlexSeats(target) + (meleeSeventh(spec) ? 1 : 0);
+  return nextMelee > allowed;
+}
+
+function meleePlanAdvice(spec, nextCounts, target) {
+  const roles = [];
+  if (classHasRole(spec.class, "Tank") && nextCounts.Tank < target.Tank) roles.push("Tank");
+  if (classHasRole(spec.class, "Heal") && nextCounts.Heal < target.Heal) roles.push("Heal");
+  if (canFillAsRanged(spec)) roles.push("Ranged");
+  if (!roles.length) {
+    return tx("근딜이 많습니다.", "Melee is already crowded.");
+  }
+  const alt = forcedSpecPhrase(spec.class, roles);
+  const particle = lang === "ko" && hasBatchim(alt) ? "으로" : "로";
+  return tx(
+    `근딜이 많습니다. ${alt}${particle} 받으면 근딜을 늘리지 않습니다.`,
+    `Melee is already crowded. As ${alt}, they would not add a melee.`
+  );
+}
+
 function extraMeleeAdvice(nextCounts, rem, covered, needDk, meleeCap) {
   if (nextCounts.Melee > meleeCap) {
     return tx(
@@ -937,6 +1013,14 @@ function evaluateApplicant(spec) {
   const fillingOpt = isFillingOptional(spec);
   const skipLower = fillingCore || fillingTank || fillingHeal;
   const meleeCap = meleeCapOf(size, target);
+  if (guaranteedMeleeSeat(spec) && spec.class !== "Death Knight") {
+    return verdict("recommend", {
+      advice: recommendWhy(spec, fillingCore, fillingOpt, nextCounts, target),
+    });
+  }
+  if (spec.role === "Melee" && meleeOverPlan(spec, nextCounts.Melee, target)) {
+    return verdict("warn", { advice: [meleePlanAdvice(spec, nextCounts, target)] });
+  }
 
   const nextDk = classCountOf("Death Knight") + (spec.class === "Death Knight" ? 1 : 0);
   const nextWl = classCountOf("Warlock") + (spec.class === "Warlock" ? 1 : 0);
@@ -955,9 +1039,10 @@ function evaluateApplicant(spec) {
   }
 
   const nowRem = stackRoomAfter(counts, Math.max(0, size - roster.length), target);
+  const noSeat = new Set(fitAfter.optionals);
   const forcedFresh =
     closedTank || closedHeal
-      ? forcedDpsSpecMsgs(rem, covered).filter(
+      ? forcedDpsSpecMsgs(rem, covered, noSeat).filter(
           (m) => !forcedDpsSpecMsgs(nowRem, nowCovered).includes(m)
         )
       : [];
@@ -966,7 +1051,12 @@ function evaluateApplicant(spec) {
     return verdict("recommend", { advice: room ? [stackRec, room] : [stackRec] });
   }
 
-  if (nextCounts.Melee > meleeCap && fillingCore && canFillAsRanged(spec)) {
+  if (
+    nextCounts.Melee > meleeCap &&
+    fillingCore &&
+    canFillAsRanged(spec) &&
+    !guaranteedMeleeSeat(spec)
+  ) {
     const alt = altSpecName(spec.class, "Ranged");
     return verdict("positive", {
       advice: [
@@ -1002,7 +1092,7 @@ function evaluateApplicant(spec) {
     canFillHeal &&
     nextCounts.Heal <= target.Heal;
   const flexRole = flexMelee || flexRanged || flexHeal;
-  if (extraMelee) {
+  if (extraMelee && !(raidSynergiesCovered() && nextCounts.Melee <= target.Melee)) {
     const msg = extraMeleeAdvice(nextCounts, rem, covered, needDk, meleeCap);
     if (msg) advice.push(msg);
   }
@@ -1043,10 +1133,10 @@ function evaluateApplicant(spec) {
     const room = roleRoomReason(spec, nextCounts, target);
     const extra =
       flexMelee
-        ? synNeededAfter(spec, MELEE_SYN_NEEDS) === 0
+        ? raidSynergiesCovered() || synNeededAfter(spec, MELEE_SYN_NEEDS) === 0
           ? tx(
-              "근딜 시너지는 탱커·힐러 등으로 이미 채워져 아무 근딜이나 받아도 됩니다.",
-              "Melee synergies are already covered by other roles, so any melee is fine."
+              "근딜 시너지는 이미 채워져 아무 근딜이나 받아도 됩니다.",
+              "Melee synergies are already covered, so any melee is fine."
             )
           : tx(
               "이 사람을 받아도 남은 근딜 자리로 시너지를 채울 수 있습니다.",
@@ -1316,7 +1406,6 @@ function buildAiAdviceHtml() {
       </div>
       <button class="ghost" type="button" id="aiRecClose">${tr("aiRecClose")}</button>
     </div>
-    ${applicantBlock}
     <section class="ai-rank${plentiful ? " ok" : ""}">
       <div class="ai-rank-h">${lang === "ko" ? "권장 사항" : "Recommended"}</div>
       ${
@@ -1340,6 +1429,7 @@ function buildAiAdviceHtml() {
           : ""
       }
     </section>
+    ${applicantBlock}
   </div>`;
 }
 
@@ -1445,6 +1535,8 @@ function renderProviderRow(syn, isOn) {
 
 let currentView = "home";
 let currentRoute = { view: "home" };
+const COMMUNITY_READY = false;
+const GAME_READY = false;
 const PLAZA_BOARDS = ["info", "recruit", "seek", "free"];
 const PLAZA_KINDS = ["regular", "pickup"];
 const PLAZA_INTENTS = ["recruit", "seek"];
@@ -1456,6 +1548,9 @@ function applyI18n() {
   document.querySelectorAll("[data-i18n-placeholder]").forEach((e) => {
     e.placeholder = tr(e.dataset.i18nPlaceholder);
   });
+  document.querySelectorAll("[data-i18n-label]").forEach((e) => {
+    e.setAttribute("aria-label", tr(e.dataset.i18nLabel));
+  });
   const titleEl = document.querySelector(".title");
   if (titleEl) {
     titleEl.textContent =
@@ -1466,13 +1561,13 @@ function applyI18n() {
           : currentView === "helper"
             ? tr("helperTab")
             : currentView === "plaza"
-              ? window.CommunityPlaza && typeof CommunityPlaza.pageTitle === "function"
+              ? COMMUNITY_READY && window.CommunityPlaza && typeof CommunityPlaza.pageTitle === "function"
                 ? CommunityPlaza.pageTitle(currentRoute)
                 : tr("plazaTitle")
               : tr("homeTitle");
   }
   document.title = `${titleEl ? titleEl.textContent : tr("homeTitle")} · WoW Raid Command`;
-  if (currentView === "plaza" && window.CommunityPlaza && typeof CommunityPlaza.relabel === "function") {
+  if (COMMUNITY_READY && currentView === "plaza" && window.CommunityPlaza && typeof CommunityPlaza.relabel === "function") {
     CommunityPlaza.relabel();
   }
   $("langBtn").textContent = lang === "ko" ? "EN" : "한글";
@@ -1758,7 +1853,11 @@ function normalizePath(pathname) {
 function parseAppPath(pathname) {
   const parts = normalizePath(pathname).split("/").filter(Boolean);
   const first = parts[0] || "";
-  if (first === "helper" || first === "planner" || first === "game") return { view: first };
+  if (first === "helper" || first === "game") return { view: first };
+  if (first === "planner") {
+    if (parts[1] === "share" && parts[2]) return { view: "planner", shareId: decodeURIComponent(parts[2]) };
+    return { view: "planner" };
+  }
   if (first !== "plaza") return { view: "home" };
   const a = parts[1] || "";
   if (!a) return { view: "plaza", walk: true };
@@ -1798,7 +1897,12 @@ function parseAppPath(pathname) {
 
 function pathFromRoute(route) {
   if (!route || route.view === "home") return "/";
+  if (route.view === "planner") {
+    if (route.shareId) return "/planner/share/" + encodeURIComponent(route.shareId);
+    return "/planner";
+  }
   if (route.view === "plaza") {
+    if (!COMMUNITY_READY) return "/plaza";
     if (route.walk) return "/plaza";
     if (route.board === "info" || route.board === "free") {
       let path = "/plaza/" + route.board;
@@ -1842,12 +1946,14 @@ function goToRoute(route, opts) {
     mode: route.mode || "",
     writeAs: route.writeAs || "",
     postId: route.postId || "",
+    shareId: route.view === "planner" ? route.shareId || "" : "",
   };
   currentView = currentRoute.view;
   const onPlaza = currentView === "plaza";
-  const onWalk = onPlaza && currentRoute.walk;
+  const plazaLive = onPlaza && COMMUNITY_READY;
+  const onWalk = plazaLive && currentRoute.walk;
   const onBoard =
-    onPlaza &&
+    plazaLive &&
     (currentRoute.board === "info" ||
       currentRoute.board === "free" ||
       ((currentRoute.board === "recruit" || currentRoute.board === "seek") && currentRoute.kind));
@@ -1858,22 +1964,23 @@ function goToRoute(route, opts) {
   $("communityView")?.classList.toggle("hidden", currentView !== "plaza");
   document.querySelector(".app")?.classList.toggle("is-home", currentView === "home");
   document.querySelector(".app")?.classList.toggle("rp-wide", currentView === "planner");
-  document.querySelector(".app")?.classList.toggle("plaza-hub-open", onPlaza && !onWalk && !onBoard);
+  document.querySelector(".app")?.classList.toggle("plaza-hub-open", plazaLive && !onWalk && !onBoard);
   document.querySelector(".app")?.classList.toggle("mw-open", onWalk);
   document.querySelector(".app")?.classList.toggle("mw-board", !!onBoard);
   if (currentView !== "planner") document.querySelector(".app")?.classList.remove("rp-fit-board");
   $("backHome")?.classList.toggle("hidden", currentView === "home");
   applyI18n();
-  if (currentView === "game" && window.RaidGameUI) {
+  if (GAME_READY && currentView === "game" && window.RaidGameUI) {
     RaidGameUI.mount(() => lang);
   }
   if (currentView === "planner" && window.RaidPlanner) {
     RaidPlanner.mount(
       () => lang,
-      () => roster.slice()
+      () => roster.slice(),
+      { shareId: currentRoute.shareId || "" }
     );
   }
-  if (currentView === "plaza" && window.CommunityPlaza) {
+  if (plazaLive && window.CommunityPlaza) {
     CommunityPlaza.mount(() => lang);
     if (typeof CommunityPlaza.openRoute === "function") CommunityPlaza.openRoute(currentRoute);
   } else if (window.CommunityPlaza) CommunityPlaza.pause();
@@ -1915,7 +2022,7 @@ $("langBtn").onclick = () => {
   lang = lang === "ko" ? "en" : "ko";
   applyI18n();
   document.dispatchEvent(new Event("raid:lang"));
-  if (!$("gameView").classList.contains("hidden") && window.RaidGameUI) {
+  if (GAME_READY && !$("gameView").classList.contains("hidden") && window.RaidGameUI) {
     RaidGameUI.render(true);
   }
   if (!$("plannerView").classList.contains("hidden") && window.RaidPlanner) {
@@ -1931,6 +2038,7 @@ window.RaidRoster = {
         class: s.class,
         spec: s.spec,
         role: s.role,
+        playerId: s.instanceId,
       })),
     };
   },
@@ -1954,7 +2062,6 @@ $("aiRecBtn").onclick = () => {
   renderAiAdvice();
   if (aiRecOpen) $("statusBox")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 };
-$("aiTestBtn").onclick = () => fillRandomApplicants(10);
 $("planRaidBtn")?.addEventListener("click", goPlanRaid);
 $("clear").onclick = () => {
   roster = [];

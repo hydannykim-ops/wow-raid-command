@@ -15,6 +15,8 @@ export async function onRequestPost(context) {
   const user = await getUserFromRequest(env.DB, request);
   if (!user) return json({ error: "unauthorized" }, 401);
   const body = await request.json().catch(() => ({}));
-  const roster = await saveRoster(env.DB, user.id, body);
-  return json({ roster }, 201);
+  const result = await saveRoster(env.DB, user.id, body);
+  if (result?.error === "limit") return json({ error: "limit" }, 409);
+  if (result?.error === "not_found") return json({ error: "not_found" }, 404);
+  return json({ roster: result.roster }, 201);
 }

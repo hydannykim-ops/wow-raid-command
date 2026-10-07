@@ -223,12 +223,19 @@
       aiSlowGate: 0.28, // 초반 AI 처리 확률
       aiMidGate: 0.55,
       aiStartAfterSec: 40, // 이 시각 이후부터 AI 트라이 준비
-      // AI 수락 기준
-      aiScoreBase: 42,
-      aiScoreGreed: 35, // threshold = base + greed * aiGreed
-      aiEarlyFill: 0.35, // 인원 비율 미만이면 문턱 완화
-      aiEarlyBarMult: 0.7,
-      aiScarceBarMult: 0.45, // 탱/힐 부족 시 수락 문턱 배율
+      /*
+       * 명성 매칭 (지원)
+       *  지원자 실력 백분위(pct 0~1) → 목표 명성 aim = 최저명성 + pct × (최고−최저)
+       *  공대 가중 = exp(-½·((명성−aim)/σ)²) × (명성/100)^popularityExp
+       *  σ: 자기보다 높은 공대(sigmaUp)는 넉넉히 · 낮은 공대(sigmaDown)는 기피
+       */
+      repMatch: { sigmaUp: 13, sigmaDown: 7, floor: 0.02, popularityExp: 0.6 },
+      /*
+       * AI 수락 문턱 (실력 백분위)
+       *  요구 pct = lo + (hi−lo) × 명성순위비율 + (greed−0.6) × greedK
+       *  탱/힐 부족 시 × scarceMult · relaxStartSec 이후 30초마다 relaxPer30s씩 완화 (하한 = 요구 × relaxFloorMult)
+       */
+      aiReqPct: { lo: 0.12, hi: 0.78, greedK: 0.15, scarceMult: 0.8, relaxStartSec: 150, relaxPer30s: 0.03, relaxFloorMult: 0.6 },
       aiRejectChanceBase: 0.3,
       aiRejectChanceGreed: 0.35,
       aiPullChanceBase: 0.2,
