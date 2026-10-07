@@ -12,7 +12,7 @@ function parsePlan(raw) {
 export async function listRosters(db, userId) {
   return db
     .prepare(
-      `SELECT id, name, size, updated_at
+      `SELECT id, name, size, plan_json, updated_at
        FROM rosters
        WHERE user_id = ?
        ORDER BY updated_at DESC`

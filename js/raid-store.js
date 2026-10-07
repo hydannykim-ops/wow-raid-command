@@ -8,7 +8,6 @@
 
   const MAX = 10;
   const LOCAL_KEY = "wow-raid-my-raids-v1";
-  const LEGACY_KEY = "wow-raid-preview-rosters";
 
   async function api(path, opts) {
     const res = await fetch(path, {
@@ -54,29 +53,11 @@
     localStorage.setItem(LOCAL_KEY, JSON.stringify(all));
   }
 
-  function migrateLegacy(list) {
-    if (list.length) return list;
-    try {
-      const legacy = JSON.parse(localStorage.getItem(LEGACY_KEY) || "[]");
-      if (!Array.isArray(legacy) || !legacy.length) return list;
-      return legacy.slice(0, MAX).map((r) => ({
-        id: r.id,
-        name: r.name || "My Roster",
-        size: r.size || 20,
-        members: r.members || [],
-        plan: r.plan || null,
-        updated_at: r.updated_at || new Date().toISOString(),
-      }));
-    } catch {
-      return list;
-    }
-  }
-
   function readLocal() {
+    const uid = userId();
+    if (!uid || uid === "_anon") return [];
     const all = readBucket();
-    const list = migrateLegacy(Array.isArray(all[userId()]) ? all[userId()] : []);
-    all[userId()] = list;
-    writeBucket(all);
+    const list = Array.isArray(all[uid]) ? all[uid] : [];
     return list.map(normalize);
   }
 
@@ -127,14 +108,16 @@
   }
 
   function mergeList(remote, local) {
-    const map = new Map();
-    remote.forEach((r) => map.set(r.id, r));
-    local.forEach((r) => {
-      const cur = map.get(r.id);
-      if (!cur) map.set(r.id, r);
-      else if (r.plan && !cur.plan) map.set(r.id, { ...cur, plan: r.plan, members: r.members?.length ? r.members : cur.members });
+    const localMap = new Map(local.map((r) => [r.id, r]));
+    return remote.map((r) => {
+      const loc = localMap.get(r.id);
+      if (!loc) return r;
+      return {
+        ...r,
+        plan: r.plan || loc.plan || null,
+        members: r.members?.length ? r.members : loc.members || [],
+      };
     });
-    return [...map.values()];
   }
 
   async function get(id) {
@@ -150,7 +133,8 @@
       writeLocal(listNow);
       return row;
     } catch {
-      return readLocal().find((r) => r.id === id) || null;
+      if (isOffline()) return readLocal().find((r) => r.id === id) || null;
+      return null;
     }
   }
 
@@ -203,7 +187,7 @@
       const saved = normalize(data.roster);
       return upsertLocal(saved.id, { plan: saved.plan !== undefined ? saved.plan : payload.plan });
     } catch (err) {
-      if (err.status === 409) throw err;
+      if (err.status === 409 || err.status === 401 || err.status === 404) throw err;
       const id = payload.id || `raid-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
       return upsertLocal(id, { plan: payload.plan });
     }

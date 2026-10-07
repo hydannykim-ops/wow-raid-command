@@ -62,10 +62,11 @@ const $ = (x) => document.getElementById(x);
 const T = {
   ko: {
     title: "WoW 레이드 구인 도우미",
-    homeTitle: "레이드 커맨드",
-    homeSub: "공대 구성, 쿨기, 오더를 나눠 두었습니다.",
+    homeTitle: "레이드 지휘실",
+    homeSub: "",
+    contactNote: "문의와 건의는",
     enter: "열기",
-    backHome: "명령 본부로",
+    backHome: "지휘실로",
     settingsLabel: "설정",
     langLabel: "언어",
     factionLabel: "진영",
@@ -115,10 +116,11 @@ const T = {
   },
   en: {
     title: "WoW Raid Recruiting Helper",
-    homeTitle: "Raid Command",
-    homeSub: "Roster, cooldowns, and callouts live in separate rooms.",
+    homeTitle: "Raid Command Room",
+    homeSub: "",
+    contactNote: "Questions and ideas",
     enter: "Open",
-    backHome: "Command hub",
+    backHome: "Command room",
     settingsLabel: "Settings",
     langLabel: "Language",
     factionLabel: "Faction",
@@ -646,19 +648,23 @@ function isFillingOptional(spec) {
   return OPTIONAL_CLASS_SET.has(spec.class) && classCountOf(spec.class) === 0;
 }
 
-function occupySeat(className, room, mode) {
-  const takeDps = () => {
+function isDpsOnlyClass(className) {
+  return classHasDps(className) && !classHasRole(className, "Tank") && !classHasRole(className, "Heal");
+}
+
+function occupySeat(className, room, mode, holdDps) {
+  const hold = holdDps || 0;
+  const canFlex = classHasRole(className, "Heal") || classHasRole(className, "Tank");
+  const takeDps = (ignoreHold) => {
     if (room.dps <= 0 || !classHasDps(className)) return false;
+    if (!ignoreHold && canFlex && room.dps <= hold) return false;
     room.dps--;
     return true;
   };
   if (mode === "core") {
     const pref = CORE_DPS_PREF[className];
-    if (pref && room.dps > 0 && classHasRole(className, pref)) {
-      room.dps--;
-      return true;
-    }
-  } else if (takeDps()) {
+    if (pref && classHasRole(className, pref) && takeDps(false)) return true;
+  } else if (takeDps(false)) {
     return true;
   }
   if (classHasRole(className, "Heal") && room.heal > 0) {
@@ -669,7 +675,7 @@ function occupySeat(className, room, mode) {
     room.tank--;
     return true;
   }
-  return mode === "core" && takeDps();
+  return mode === "core" && takeDps(true);
 }
 
 function seatRoom(src) {
@@ -680,18 +686,23 @@ function seatRoom(src) {
   };
 }
 
-function seatClasses(roomSrc, classNames, covered, mode) {
+function seatClasses(roomSrc, classNames, covered, mode, holdFor) {
   const room = seatRoom(roomSrc);
+  const pending = classNames.filter((c) => !covered.has(c));
   const unplaced = [];
-  for (const c of classNames) {
-    if (covered.has(c)) continue;
-    if (!occupySeat(c, room, mode)) unplaced.push(c);
+  for (const c of pending) {
+    const laterDpsOnly = pending.filter(
+      (x) => x !== c && !unplaced.includes(x) && isDpsOnlyClass(x)
+    ).length;
+    const hold = (holdFor || 0) + laterDpsOnly;
+    if (!occupySeat(c, room, mode, hold)) unplaced.push(c);
   }
   return { ...room, unplaced };
 }
 
 function seatMissingCores(rem, covered) {
-  return seatClasses(rem, CORE_CLASSES, covered, "core");
+  const optHold = OPTIONAL_CLASSES.filter((c) => !covered.has(c) && isDpsOnlyClass(c)).length;
+  return seatClasses(rem, CORE_CLASSES, covered, "core", optHold);
 }
 
 function seatMissingOptionals(seated, covered) {
@@ -712,6 +723,13 @@ function reserveDkWlRoom(seated, dkCount, wlCount) {
   };
 }
 
+function canStillSeatOptional(rem, covered, className) {
+  const hold = isDpsOnlyClass(className) ? 1 : 0;
+  const seated = seatClasses(rem, CORE_CLASSES, covered, "core", hold);
+  if (seated.unplaced.length) return false;
+  return seatClasses(seated, [className], covered, "opt").unplaced.length === 0;
+}
+
 function remainingSynAfter(rem, covered, dkCount, wlCount, seatedCores) {
   const seated = seatedCores || seatMissingCores(rem, covered);
   if (seated.unplaced.length) {
@@ -722,10 +740,11 @@ function remainingSynAfter(rem, covered, dkCount, wlCount, seatedCores) {
     return { ok: false, cores: [], optionals: [], stackOk: false };
   }
   const opt = seatMissingOptionals(reserved, covered);
+  const optionals = opt.unplaced.filter((name) => !canStillSeatOptional(rem, covered, name));
   return {
     ok: opt.unplaced.length === 0,
     cores: [],
-    optionals: opt.unplaced,
+    optionals,
     stackOk: true,
   };
 }
@@ -1099,8 +1118,9 @@ function evaluateApplicant(spec) {
 
   if (advice.length) return verdict("warn", { advice, nice });
 
+  const fillingSyn = fillingCore || fillingOpt || firstStack;
   if (!fitAfter.ok && !fillingCore && !firstStack) {
-    return verdict("positive", {
+    return verdict(fillingOpt ? "recommend" : "positive", {
       advice: [
         ...recommendWhy(spec, fillingCore, fillingOpt, nextCounts, target),
         leftoverSynAdvice(fitAfter),
@@ -1112,7 +1132,7 @@ function evaluateApplicant(spec) {
   }
 
   if (forcedFresh.length || forceTH) {
-    return verdict("positive", {
+    return verdict(fillingSyn ? "recommend" : "positive", {
       advice: [
         ...recommendWhy(spec, fillingCore, fillingOpt, nextCounts, target),
         forceTH,
@@ -1566,7 +1586,9 @@ function applyI18n() {
                 : tr("plazaTitle")
               : tr("homeTitle");
   }
-  document.title = `${titleEl ? titleEl.textContent : tr("homeTitle")} · WoW Raid Command`;
+  const pageTitle = titleEl ? titleEl.textContent : tr("homeTitle");
+  const brandName = lang === "ko" ? "레이드 지휘실" : "Raid Command Room";
+  document.title = currentView === "home" || pageTitle === brandName ? brandName : `${pageTitle} · ${brandName}`;
   if (COMMUNITY_READY && currentView === "plaza" && window.CommunityPlaza && typeof CommunityPlaza.relabel === "function") {
     CommunityPlaza.relabel();
   }
@@ -2008,6 +2030,7 @@ document.querySelectorAll("[data-view]").forEach((el) => {
   });
 });
 $("brandHome")?.addEventListener("click", () => {
+  if (currentView === "planner" && window.RaidPlanner?.handleBack?.()) return;
   if (currentView !== "home") goToView("home");
 });
 window.addEventListener("popstate", () => {

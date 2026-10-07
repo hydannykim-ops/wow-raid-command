@@ -230,12 +230,14 @@
         } else if (kind === "random") {
           throttled("skill:rand", () => {
             SFX.random();
+            if (ev.doubles === 0) return;
             flash("random");
             shake("soft");
           });
         } else {
           throttled("skill:aoe", () => {
             SFX.aoe();
+            if (ev.skillType === "aoe2" && ev.doubles === 0) return;
             flash(ev.skillType === "aoe2" ? "aoe2" : "aoe");
             shake("soft");
           });

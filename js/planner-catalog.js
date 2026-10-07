@@ -216,7 +216,7 @@
       name: "Anti-Magic Zone",
       nameKo: "대마법 지대",
       category: "raidDef",
-      cooldown: 120,
+      cooldown: 180,
       duration: 10,
       iconUrl: icon("spell_deathknight_antimagiczone"),
       providers: ["Death Knight"],

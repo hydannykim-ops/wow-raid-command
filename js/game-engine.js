@@ -36,6 +36,7 @@
     gameSynergies: BAL.gameSynergies || [],
     adSpecs: BAL.adSpecs || [],
     cooldown: BAL.cooldown || {},
+    arena: BAL.arena || {},
   };
 
   const BASE_DPS = B.combat.baseDps ?? 100000;
@@ -216,7 +217,7 @@
   function skillKind(skill) {
     const t = skill?.type || "raid";
     if (t === "tankBuster" || t === "buster") return "tankBuster";
-    if (t === "random" || t === "soak") return "random";
+    if (t === "random" || t === "soak" || t === "shared" || t === "drop") return "random";
     return "raid";
   }
 
@@ -838,6 +839,715 @@
     return raw * scale;
   }
 
+  /* =========================================================
+   * 공간 시뮬 (전장) — 좌표는 오더 그림판과 같은 1024×576
+   * ========================================================= */
+  const AR = B.arena;
+  const TICK = AR.tickSec ?? 0.1;
+  const SUBSTEPS = Math.max(1, Math.round(1 / TICK));
+  const RUN_SPEED = AR.runSpeed ?? 55;
+  const BOSS_RADIUS = AR.bossRadius ?? 26;
+  const MELEE_RANGE = AR.meleeRange ?? 48;
+  const DEG = Math.PI / 180;
+  const SPATIAL_SHAPES = new Set(["circle", "cone", "line"]);
+
+  function arenaConfig(bossId) {
+    const cfg = AR.maps?.[bossId] || {};
+    return {
+      mapBossId: cfg.mapBossId || null,
+      bounds: cfg.bounds || AR.defaultBounds || { type: "circle", cx: 512, cy: 288, r: 236 },
+      boss: { x: cfg.boss?.x ?? 512, y: cfg.boss?.y ?? 260, units: cfg.boss?.units ?? 1 },
+      layout: { ...(AR.layout || {}), ...(cfg.layout || {}) },
+    };
+  }
+
+  function insideBounds(b, x, y, pad = 8) {
+    if (b.type === "rect") return x >= b.x0 + pad && x <= b.x1 - pad && y >= b.y0 + pad && y <= b.y1 - pad;
+    return Math.hypot(x - b.cx, y - b.cy) <= b.r - pad;
+  }
+
+  function clampToBounds(b, x, y, pad = 8) {
+    if (b.type === "rect") {
+      return { x: clamp(x, b.x0 + pad, b.x1 - pad), y: clamp(y, b.y0 + pad, b.y1 - pad) };
+    }
+    const dx = x - b.cx;
+    const dy = y - b.cy;
+    const d = Math.hypot(dx, dy);
+    const lim = b.r - pad;
+    if (d <= lim) return { x, y };
+    return { x: b.cx + (dx / d) * lim, y: b.cy + (dy / d) * lim };
+  }
+
+  /** 역할별 기본 자리. 보스는 +y(아래) 방향의 메인탱을 바라봄 */
+  function computeLayout(members, bossId) {
+    const cfg = arenaConfig(bossId);
+    const L = cfg.layout;
+    const bx = cfg.boss.x;
+    const by = cfg.boss.y;
+    const tf = L.tankFront ?? 50;
+    const side = L.offTankSide ?? 62;
+    const tankSpots = [
+      { x: bx, y: by + tf },
+      { x: bx + side, y: by + tf * 0.7 },
+      { x: bx - side, y: by + tf * 0.7 },
+    ];
+    const homes = {};
+    members
+      .filter((m) => m.role === "Tank")
+      .forEach((m, i) => {
+        homes[m.id] = { ...tankSpots[Math.min(i, tankSpots.length - 1)] };
+      });
+    const back = -Math.PI / 2;
+    const ring = (list, rRange, arcDeg) => {
+      const n = list.length;
+      list.forEach((m, i) => {
+        const f = n > 1 ? i / (n - 1) : 0.5;
+        const a = back + (f - 0.5) * arcDeg * DEG;
+        const r = i % 2 === 0 ? rRange[0] : rRange[1];
+        homes[m.id] = { x: bx + Math.cos(a) * r, y: by + Math.sin(a) * r };
+      });
+    };
+    const arc = L.rangedArc ?? 250;
+    ring(members.filter((m) => m.role === "Melee"), L.meleeR || [46, 66], L.meleeArc ?? 150);
+    ring(members.filter((m) => m.role === "Ranged"), L.rangedR || [150, 205], arc);
+    ring(members.filter((m) => m.role === "Heal"), L.healR || [118, 160], arc * 0.8);
+    Object.keys(homes).forEach((id) => {
+      homes[id] = clampToBounds(cfg.bounds, homes[id].x, homes[id].y, 14);
+    });
+    return { homes, cfg, tankSpots };
+  }
+
+  function combatNow(cbt) {
+    return (cbt?.t ?? 0) + (cbt?.sub ?? 0) * TICK;
+  }
+
+  function pointInHazard(h, x, y, margin = 0) {
+    const dx = x - h.x;
+    const dy = y - h.y;
+    if (h.shape === "circle") return Math.hypot(dx, dy) <= h.radius + margin;
+    if (h.shape === "cone") {
+      const d = Math.hypot(dx, dy);
+      if (d > h.len + margin) return false;
+      if (d < BOSS_RADIUS * 0.6) return true;
+      const diff = Math.atan2(Math.sin(Math.atan2(dy, dx) - h.rot), Math.cos(Math.atan2(dy, dx) - h.rot));
+      return Math.abs(diff) <= (h.spread * DEG) / 2 + margin / Math.max(d, 1);
+    }
+    if (h.shape === "line") {
+      const c = Math.cos(h.rot);
+      const s = Math.sin(h.rot);
+      const along = dx * c + dy * s;
+      const across = -dx * s + dy * c;
+      return along >= -margin && along <= h.len + margin && Math.abs(across) <= h.width / 2 + margin;
+    }
+    return false;
+  }
+
+  /** 피해야 할 영역: 대기 장판(같이 맞기 · 본인이 들고 있는 바닥 제외) + 남아있는 웅덩이 */
+  function dangerAreas(cbt, m) {
+    const list = cbt.hazards.filter((h) => h.mode !== "shared" && h.followId !== m?.id);
+    return cbt.pools?.length ? list.concat(cbt.pools) : list;
+  }
+
+  /** (x,y)에서 가장 적게 움직이면서 areas 밖이고 prefer에 가까운 지점 */
+  function freeSpot(cbt, x, y, areas, prefer, margin) {
+    const unsafe = (px, py) => areas.some((h) => pointInHazard(h, px, py, margin));
+    if (!unsafe(x, y)) return { x, y };
+    const b = cbt.arena.bounds;
+    const stepD = 14;
+    let best = null;
+    let bestScore = Infinity;
+    for (let ring = 1; ring <= 30; ring++) {
+      const d = ring * stepD;
+      if (d > bestScore) break;
+      for (let k = 0; k < 24; k++) {
+        const a = (k / 24) * Math.PI * 2;
+        const px = x + Math.cos(a) * d;
+        const py = y + Math.sin(a) * d;
+        if (!insideBounds(b, px, py, 10) || unsafe(px, py)) continue;
+        const score = d + 0.35 * Math.hypot(px - prefer.x, py - prefer.y);
+        if (score < bestScore) {
+          bestScore = score;
+          best = { x: px, y: py };
+        }
+      }
+    }
+    return best || { x, y };
+  }
+
+  function findSafePoint(cbt, m) {
+    return freeSpot(cbt, m.x, m.y, dangerAreas(cbt, m), cbt.homes[m.id] || m, AR.safeMargin ?? 10);
+  }
+
+  /** 플레이어가 배치한 징표 (보스별) — square: 같이 맞는 바닥 · cross: 장판 남기는 바닥 */
+  function getMarkers(raid, bossId) {
+    return raid?.markers?.[bossId] || {};
+  }
+
+  /** 웅덩이에 덮인 기본 자리는 가장 가까운 빈 곳으로 옮기고, 웅덩이가 사라지면 원래 자리로 */
+  function relocateHomes(cbt) {
+    const pools = cbt.pools || [];
+    Object.keys(cbt.baseHomes || {}).forEach((id) => {
+      const base = cbt.baseHomes[id];
+      const next = pools.length ? freeSpot(cbt, base.x, base.y, pools, base, 8) : { ...base };
+      const cur = cbt.homes[id];
+      if (!cur || Math.hypot(cur.x - next.x, cur.y - next.y) > 0.5) cbt.homes[id] = next;
+    });
+  }
+
+  /** X 징표 위치. 이미 웅덩이·다른 운반자 자리가 있으면 그 밖에서 X에 가장 가까운 곳 */
+  function dropSpot(raid, cbt, m, h) {
+    const X = getMarkers(raid, cbt.bossId).cross;
+    if (!X) return { x: m.x, y: m.y };
+    const pr = h.skill?.poolRadius ?? h.radius * 1.3;
+    const taken = cbt.hazards.filter((o) => o !== h && o.mode === "drop" && o.dropSpot).map((o) => o.dropSpot);
+    const blocked = (x, y) =>
+      cbt.pools.some((p) => Math.hypot(x - p.x, y - p.y) < p.radius + pr * 0.55) ||
+      taken.some((s) => Math.hypot(x - s.x, y - s.y) < pr * 1.2);
+    const b = cbt.arena.bounds;
+    const start = clampToBounds(b, X.x, X.y, 12);
+    if (!blocked(start.x, start.y)) return start;
+    for (let ring = 1; ring <= 40; ring++) {
+      const d = ring * 10;
+      let best = null;
+      for (let k = 0; k < 32; k++) {
+        const a = (k / 32) * Math.PI * 2;
+        const x = start.x + Math.cos(a) * d;
+        const y = start.y + Math.sin(a) * d;
+        if (!insideBounds(b, x, y, 12) || blocked(x, y)) continue;
+        const toMe = Math.hypot(x - m.x, y - m.y);
+        if (!best || toMe < best.toMe) best = { x, y, toMe };
+      }
+      if (best) return { x: best.x, y: best.y };
+    }
+    return start;
+  }
+
+  /** 반응 지연(초) = base + scale × (1 − s/100) × F(M) ± jitter */
+  function reactionDelay(s, M) {
+    const R = AR.reaction || {};
+    const j = R.jitter ?? 0.2;
+    const v = (R.base ?? 0.3) + (R.scale ?? 1.5) * (1 - clamp(s, 0, 100) / 100) * Math.max(0, F(M));
+    return Math.max(0.1, v + rnd(-j, j));
+  }
+
+  function spatialSpec(skill) {
+    const def = AR.skillDefaults?.[skill.type] || {};
+    const kind = skillKind(skill);
+    const fallback = kind === "tankBuster" ? "buster" : kind === "random" ? "circle" : "raid";
+    return { ...def, ...skill, shape: skill.shape || def.shape || fallback };
+  }
+
+  function pushFx(cbt, fx) {
+    if (!cbt.fx) cbt.fx = [];
+    cbt.fx.push({ t0: combatNow(cbt), dur: 0.8, ...fx });
+  }
+
+  function pruneFx(cbt, now) {
+    if (cbt.fx?.length) cbt.fx = cbt.fx.filter((f) => f.t0 + f.dur >= now);
+  }
+
+  function livingTanks(cbt) {
+    return cbt.members.filter((m) => m.alive && m.role === "Tank");
+  }
+
+  function sendHome(cbt, m, now) {
+    if (!m.alive || m.reactAt != null || m.task) return;
+    m.returnAt = now;
+  }
+
+  function swapHomes(cbt, a, b) {
+    [cbt.homes[a], cbt.homes[b]] = [cbt.homes[b], cbt.homes[a]];
+    if (cbt.baseHomes) [cbt.baseHomes[a], cbt.baseHomes[b]] = [cbt.baseHomes[b], cbt.baseHomes[a]];
+  }
+
+  /** 메인탱이 죽었으면 살아있는 탱이 정면 자리를 이어받음 */
+  function ensureActiveTank(raid) {
+    const cbt = raid.combat;
+    const active = cbt.members.find((m) => m.id === cbt.activeTankId);
+    if (active?.alive) return active;
+    const next = livingTanks(cbt)[0];
+    if (!next) return null;
+    if (active) swapHomes(cbt, active.id, next.id);
+    cbt.activeTankId = next.id;
+    sendHome(cbt, next, combatNow(cbt));
+    return next;
+  }
+
+  function swapTanks(raid) {
+    const cbt = raid.combat;
+    const active = ensureActiveTank(raid);
+    const other = livingTanks(cbt).find((m) => m.id !== active?.id);
+    if (!active || !other) return;
+    swapHomes(cbt, active.id, other.id);
+    cbt.activeTankId = other.id;
+    const now = combatNow(cbt);
+    sendHome(cbt, active, now);
+    sendHome(cbt, other, now);
+    pushFx(cbt, { kind: "taunt", memberId: other.id, dur: 1.4 });
+    pushLog(raid, `탱 교대 — ${other.name} 도발`, "info");
+    emitCombatEvent(raid, "taunt", { memberId: other.id });
+  }
+
+  function pickAimTarget(cbt, spec) {
+    let pool = cbt.members.filter((m) => m.alive);
+    if (spec.aim === "tank") {
+      const act = cbt.members.find((m) => m.id === cbt.activeTankId && m.alive);
+      if (act) return act;
+    }
+    if (spec.includeTanks !== true) pool = pool.filter((m) => m.role !== "Tank");
+    return pool.length ? pick(pool) : null;
+  }
+
+  /** 장판 시전: 예고 → telegraph초 뒤 폭발. 안에 있는 대원은 반응 지연 후 회피 */
+  function castSpatialSkill(raid, boss, phaseInfo, spec) {
+    const cbt = raid.combat;
+    const now = combatNow(cbt);
+    const bp = cbt.bossPos;
+    const castId = ++cbt.hazardSeq;
+    const base = {
+      castId,
+      skillId: spec.id || spec.type,
+      name: spec.nameKo || spec.name || spec.id,
+      shape: spec.shape,
+      radius: spec.radius ?? 52,
+      spread: spec.spread ?? 60,
+      len: spec.len ?? 300,
+      width: spec.width ?? 54,
+      castAt: now,
+      at: now + (spec.telegraph ?? 3),
+      fatal: !!spec.fatal,
+      phase: phaseInfo.phase,
+      mode: spec.mode || "zone",
+      skill: spec,
+    };
+    const made = [];
+    if (spec.at === "target" && spec.shape === "circle") {
+      const carried = base.mode !== "zone";
+      const pool = cbt.members.filter((m) => !m.task);
+      const count = spec.count ?? (carried ? 1 : 3);
+      selectSkillTargets({ ...spec, type: "random", count }, pool).forEach((m) => {
+        made.push({
+          ...base,
+          id: `${castId}:${m.id}`,
+          x: m.x,
+          y: m.y,
+          rot: 0,
+          targetId: m.id,
+          followId: carried ? m.id : null,
+        });
+      });
+    } else {
+      let rot = Math.PI / 2;
+      if (spec.shape !== "circle") {
+        const tgt = pickAimTarget(cbt, spec);
+        rot = tgt ? Math.atan2(tgt.y - bp.y, tgt.x - bp.x) : rnd(0, Math.PI * 2);
+      }
+      made.push({ ...base, id: `${castId}:boss`, x: bp.x, y: bp.y, rot });
+    }
+    if (!made.length) return;
+    cbt.hazards.push(...made);
+    made.forEach((h) => {
+      if (h.mode === "shared") assignSoak(raid, boss, h);
+      else {
+        if (h.mode === "drop") assignDrop(raid, boss, h);
+        alertMembers(raid, boss, h);
+      }
+    });
+    const label = spec.nameKo || spec.name || spec.id;
+    const tag = base.mode === "shared" ? "같이 맞기" : base.mode === "drop" ? "장판 남김" : "예고";
+    pushLog(raid, `[${tag}] ${label}${made.length > 1 ? ` ×${made.length}` : ""}`, "warn");
+    emitCombatEvent(raid, "telegraph", { skillId: spec.id, count: made.length, mode: base.mode });
+  }
+
+  /** 운반/집결 임무 부여 — 반응 지연 후 시작, 멍때리면 제자리 */
+  function giveTask(m, task, boss, phase, now) {
+    const M = getProficiency(m, boss.id, phase || 1);
+    m.task = task;
+    m.reactAt = now + reactionDelay(m.survivalScore, M);
+    const pf = hitChances(m.survivalScore, M).pfFatal * (AR.blunderMult ?? 1);
+    m.blunder = Math.random() * 100 < pf ? "freeze" : null;
+    m.returnAt = null;
+  }
+
+  /** 장판 남기는 바닥: 대상자가 X 징표(없으면 제자리)로 들고 감 */
+  function assignDrop(raid, boss, h) {
+    const cbt = raid.combat;
+    const m = cbt.members.find((x) => x.id === h.followId);
+    if (m) giveTask(m, { kind: "dropCarry", hazardId: h.id }, boss, h.phase, combatNow(cbt));
+  }
+
+  /** 같이 맞는 바닥: 대상자는 네모 징표(없으면 제자리)로, 가까운 대원들이 모여서 나눠 맞음 */
+  function assignSoak(raid, boss, h) {
+    const cbt = raid.combat;
+    const now = combatNow(cbt);
+    const carrier = cbt.members.find((x) => x.id === h.followId);
+    if (carrier) giveTask(carrier, { kind: "soakCarry", hazardId: h.id }, boss, h.phase, now);
+    const sq = getMarkers(raid, cbt.bossId).square;
+    const dest = sq || { x: h.x, y: h.y };
+    const need = Math.max(1, h.skill?.soakers ?? 5);
+    cbt.members
+      .filter((m) => m.alive && !m.task && m.role !== "Tank" && m.id !== h.followId)
+      .sort((a, b) => Math.hypot(a.x - dest.x, a.y - dest.y) - Math.hypot(b.x - dest.x, b.y - dest.y))
+      .slice(0, need - 1)
+      .forEach((m) => {
+        const a = rnd(0, Math.PI * 2);
+        const r = rnd(0, h.radius * 0.55);
+        const task = { kind: "soakHelp", hazardId: h.id, ox: Math.cos(a) * r, oy: Math.sin(a) * r };
+        if (sq) task.anchor = clampToBounds(cbt.arena.bounds, sq.x, sq.y, 12);
+        giveTask(m, task, boss, h.phase, now);
+      });
+  }
+
+  function startTask(raid, cbt, m) {
+    const h = cbt.hazards.find((x) => x.id === m.task.hazardId);
+    if (!h) {
+      m.task = null;
+      return;
+    }
+    if (m.blunder === "freeze") {
+      m.task.frozen = true;
+      m.tx = m.x;
+      m.ty = m.y;
+      m.dodgeBlunder = "freeze";
+      return;
+    }
+    m.task.active = true;
+    m.task.phase = h.phase;
+    if (m.task.kind === "dropCarry") {
+      const p = dropSpot(raid, cbt, m, h);
+      h.dropSpot = p;
+      m.task.goal = p;
+    } else if (m.task.kind === "soakCarry") {
+      const sq = getMarkers(raid, cbt.bossId).square;
+      m.task.goal = sq ? clampToBounds(cbt.arena.bounds, sq.x, sq.y, 12) : { x: m.x, y: m.y };
+    }
+    if (m.task.goal) {
+      m.tx = m.task.goal.x;
+      m.ty = m.task.goal.y;
+    }
+  }
+
+  /** 임무 수행 중에도 다른 장판이 자기 자리/목표를 덮으면 반응 지연 후 피했다가 복귀 (웅덩이는 지나가기만 함) */
+  function updateTask(cbt, m, now) {
+    const task = m.task;
+    if (!task.active) return;
+    const h = cbt.hazards.find((x) => x.id === task.hazardId);
+    if (!h) {
+      m.task = null;
+      return;
+    }
+    const anchor = task.anchor || h;
+    const goal =
+      task.kind === "soakHelp"
+        ? clampToBounds(cbt.arena.bounds, anchor.x + task.ox, anchor.y + task.oy, 10)
+        : task.goal || { x: m.x, y: m.y };
+    const threats = cbt.hazards.filter((o) => o.mode !== "shared" && o.followId !== m.id);
+    const threatened = threats.some((o) => pointInHazard(o, m.x, m.y, 2) || pointInHazard(o, goal.x, goal.y, 2));
+    if (threatened) {
+      if (task.dodgeAt == null) {
+        const M = getProficiency(m, cbt.bossId, task.phase || 1);
+        task.dodgeAt = now + reactionDelay(m.survivalScore, M);
+      }
+      if (now >= task.dodgeAt - 1e-6) {
+        const p = freeSpot(cbt, m.x, m.y, threats, goal, AR.safeMargin ?? 10);
+        m.tx = p.x;
+        m.ty = p.y;
+      }
+      return;
+    }
+    task.dodgeAt = null;
+    m.tx = goal.x;
+    m.ty = goal.y;
+  }
+
+  function clearTasksFor(cbt, hazardId) {
+    cbt.members.forEach((m) => {
+      if (m.task?.hazardId !== hazardId) return;
+      m.task = null;
+      m.reactAt = null;
+      m.blunder = null;
+      m.dodgeBlunder = null;
+    });
+  }
+
+  function alertMembers(raid, boss, hz) {
+    const cbt = raid.combat;
+    const now = combatNow(cbt);
+    cbt.members.forEach((m) => {
+      if (!m.alive || m.reactAt != null || m.task || hz.followId === m.id) return;
+      const inNow = pointInHazard(hz, m.x, m.y, 2);
+      const inTarget = pointInHazard(hz, m.tx ?? m.x, m.ty ?? m.y, 2);
+      const inHome = pointInHazard(hz, cbt.homes[m.id]?.x ?? m.x, cbt.homes[m.id]?.y ?? m.y, 2);
+      if (!inNow && !inTarget && !(inHome && m.returnAt != null)) return;
+      const M = getProficiency(m, boss.id, hz.phase || 1);
+      m.reactAt = now + reactionDelay(m.survivalScore, M);
+      const pf = hitChances(m.survivalScore, M).pfFatal * (AR.blunderMult ?? 1);
+      m.blunder = Math.random() * 100 < pf ? (Math.random() < 0.5 ? "freeze" : "wrong") : null;
+    });
+  }
+
+  function hitContext(cbt) {
+    return {
+      synDr: cbt.buffs?.drMult ?? 1,
+      tankSaveDr: hasTankSaveAura(cbt.members) ? 1 - (B.healer?.tankSaveDr ?? 0.1) : 1,
+      enrageAtk: cbt.enraged ? ENRAGE_DMG_MULT : 1,
+    };
+  }
+
+  const DEATH_TEXT = {
+    fatal: "즉사",
+    zone: "장판 피격으로 사망",
+    pool: "웅덩이에 서 있다가 사망",
+    soak: "같이 맞기 인원 부족으로 사망",
+    hit: "피격으로 사망",
+  };
+
+  /** 피해 1회 적용 (fatal은 받피 무시). 사망 시 true */
+  function dealHit(raid, m, amount, reason, ctx) {
+    const cbt = raid.combat;
+    const dr = reason === "fatal" ? 1 : m.role === "Tank" ? ctx.synDr * ctx.tankSaveDr : ctx.synDr;
+    const died = applyUnitDamage(m, reason === "fatal" ? m.hp : amount, reason, cbt.t, dr, raid);
+    if (died) {
+      cbt.deadCount += 1;
+      pushLog(raid, `${m.name} ${DEATH_TEXT[reason] || "사망"}`, "bad");
+    }
+    return died;
+  }
+
+  /** 같이 맞는 바닥: 안에 있는 인원이 나눠 맞음. 1인 피해 = 기본 피격 × 필요인원 / 들어온 인원 */
+  function detonateShared(raid, boss, h) {
+    const cbt = raid.combat;
+    const spec = h.skill || {};
+    const ctx = hitContext(cbt);
+    const need = Math.max(1, spec.soakers ?? 5);
+    const inside = cbt.members.filter((m) => m.alive && pointInHazard(h, m.x, m.y, 4));
+    clearTasksFor(cbt, h.id);
+    pushFx(cbt, { kind: "soak", x: h.x, y: h.y, radius: h.radius, ok: inside.length >= need, dur: 0.8 });
+    let deaths = 0;
+    if (!inside.length) {
+      cbt.members
+        .filter((m) => m.alive)
+        .forEach((m) => {
+          if (dealHit(raid, m, skillBaseHit(m, spec, ctx.enrageAtk), "soak", ctx)) deaths += 1;
+        });
+      pushLog(raid, `[같이 맞기] ${h.name} — 아무도 안 맞음! 공대 전체 피해`, "bad");
+    } else {
+      const mult = need / inside.length;
+      const reason = inside.length < need ? "soak" : "hit";
+      inside.forEach((m) => {
+        if (dealHit(raid, m, skillBaseHit(m, spec, ctx.enrageAtk) * mult, reason, ctx)) deaths += 1;
+      });
+      pushLog(raid, `[같이 맞기] ${h.name} — ${inside.length}/${need}명`, inside.length >= need ? "ok" : "warn");
+    }
+    emitCombatEvent(raid, "skill", {
+      skillKind: "random",
+      skillType: spec.type,
+      skillId: spec.id,
+      deaths,
+      doubles: Math.max(0, need - inside.length),
+    });
+  }
+
+  /** 장판 남기는 바닥: 운반자는 기본 피격, 같이 서 있던 사람은 2배 → 그 자리에 웅덩이 */
+  function detonateDrop(raid, boss, h) {
+    const cbt = raid.combat;
+    const spec = h.skill || {};
+    const ctx = hitContext(cbt);
+    const doubleMult = B.unit.doubleHitMult ?? 2;
+    let deaths = 0;
+    cbt.members.forEach((m) => {
+      if (!m.alive || !pointInHazard(h, m.x, m.y, 0)) return;
+      const carrier = m.id === h.followId;
+      const dmg = skillBaseHit(m, spec, ctx.enrageAtk) * (carrier ? 1 : doubleMult);
+      if (dealHit(raid, m, dmg, carrier ? "hit" : "zone", ctx)) deaths += 1;
+    });
+    clearTasksFor(cbt, h.id);
+    const now = combatNow(cbt);
+    const pool = {
+      id: `pool:${h.id}`,
+      shape: "circle",
+      mode: "pool",
+      name: h.name,
+      x: h.x,
+      y: h.y,
+      radius: spec.poolRadius ?? h.radius * 1.3,
+      castAt: now,
+      until: now + (spec.poolSec ?? 40),
+      tickPct: spec.poolTickPct ?? 0.08,
+      phase: h.phase,
+    };
+    cbt.pools.push(pool);
+    pushFx(cbt, { kind: "boom", hazard: { ...h, skill: null }, dur: 0.6 });
+    relocateHomes(cbt);
+    alertMembers(raid, boss, pool);
+    const X = getMarkers(raid, cbt.bossId).cross;
+    const nearX = X && Math.hypot(pool.x - X.x, pool.y - X.y) <= pool.radius * 2.2;
+    pushLog(raid, `[장판 남김] ${h.name} → 웅덩이 생성${X ? (nearX ? " (X 징표)" : " (X 징표 못 감)") : ""}`, nearX || !X ? "info" : "warn");
+    emitCombatEvent(raid, "skill", { skillKind: "random", skillType: spec.type, skillId: spec.id, deaths, doubles: 0 });
+  }
+
+  /** 웅덩이: 초당 피해 · 만료 시 기본 자리 복구 */
+  function tickPools(raid) {
+    const cbt = raid.combat;
+    if (!cbt.pools?.length) return;
+    const before = cbt.pools.length;
+    cbt.pools = cbt.pools.filter((p) => p.until > cbt.t);
+    if (cbt.pools.length !== before) relocateHomes(cbt);
+    if (!cbt.pools.length) return;
+    const ctx = hitContext(cbt);
+    cbt.members.forEach((m) => {
+      if (!m.alive) return;
+      const p = cbt.pools.find((pl) => pointInHazard(pl, m.x, m.y, 0));
+      if (p) dealHit(raid, m, m.maxHp * p.tickPct * ctx.enrageAtk, "pool", ctx);
+    });
+  }
+
+  function detonateGroup(raid, boss, group) {
+    const cbt = raid.combat;
+    const h0 = group[0];
+    if (h0.mode === "shared") return group.forEach((h) => detonateShared(raid, boss, h));
+    if (h0.mode === "drop") return group.forEach((h) => detonateDrop(raid, boss, h));
+    const spec = h0.skill || {};
+    const ctx = hitContext(cbt);
+    const doubleMult = B.unit.doubleHitMult ?? 2;
+    const hitNames = new Set();
+    let deaths = 0;
+    group.forEach((h) => {
+      pushFx(cbt, { kind: "boom", hazard: { ...h, skill: null }, dur: 0.6 });
+      cbt.members.forEach((m) => {
+        if (!m.alive || !pointInHazard(h, m.x, m.y, 0)) return;
+        hitNames.add(m.name);
+        const reason = h.fatal ? "fatal" : "zone";
+        if (dealHit(raid, m, skillBaseHit(m, spec, ctx.enrageAtk) * doubleMult, reason, ctx)) deaths += 1;
+      });
+    });
+    const label = h0.name || spec.id;
+    if (hitNames.size) pushLog(raid, `[장판] ${label} → 피격 ${[...hitNames].join(", ")}`, "warn");
+    else pushLog(raid, `[장판] ${label} — 전원 회피`, "ok");
+    emitCombatEvent(raid, "skill", {
+      skillKind: skillKind(spec),
+      skillType: spec.type,
+      skillId: spec.id,
+      deaths,
+      doubles: hitNames.size,
+    });
+  }
+
+  /** 0.1초 단위: 반응 → 복귀 판단 → 이동 → 장판 폭발 */
+  function spatialStep(raid, boss) {
+    const cbt = raid.combat;
+    const now = combatNow(cbt);
+    const bp = cbt.bossPos;
+    const margin = AR.safeMargin ?? 10;
+    const homeUnsafe = (m) => {
+      const hm = cbt.homes[m.id];
+      return !!hm && dangerAreas(cbt, m).some((h) => pointInHazard(h, hm.x, hm.y, margin));
+    };
+
+    cbt.members.forEach((m) => {
+      if (!m.alive) {
+        m.moving = false;
+        m.task = null;
+        return;
+      }
+      if (m.reactAt != null && now >= m.reactAt - 1e-6) {
+        m.reactAt = null;
+        if (m.task) {
+          startTask(raid, cbt, m);
+          m.blunder = null;
+          return;
+        }
+        if (m.blunder === "freeze") {
+          m.tx = m.x;
+          m.ty = m.y;
+        } else if (m.blunder === "wrong") {
+          const a = rnd(0, Math.PI * 2);
+          const p = clampToBounds(cbt.arena.bounds, m.x + Math.cos(a) * rnd(18, 36), m.y + Math.sin(a) * rnd(18, 36));
+          m.tx = p.x;
+          m.ty = p.y;
+        } else {
+          const p = findSafePoint(cbt, m);
+          m.tx = p.x;
+          m.ty = p.y;
+        }
+        m.dodgeBlunder = m.blunder;
+        m.blunder = null;
+        m.returnAt = null;
+        return;
+      }
+      if (m.reactAt != null) return;
+      if (m.task) {
+        updateTask(cbt, m, now);
+        return;
+      }
+      const hm = cbt.homes[m.id];
+      if (!hm) return;
+      const atHome = Math.hypot((m.tx ?? m.x) - hm.x, (m.ty ?? m.y) - hm.y) < 1;
+      if (atHome || homeUnsafe(m)) {
+        if (!atHome) m.returnAt = null;
+        return;
+      }
+      if (m.returnAt == null) m.returnAt = now + (AR.returnDelay ?? 0.5);
+      if (now >= m.returnAt - 1e-6) {
+        m.tx = hm.x;
+        m.ty = hm.y;
+        m.returnAt = null;
+        m.dodgeBlunder = null;
+      }
+    });
+
+    const step = RUN_SPEED * TICK;
+    const reach = BOSS_RADIUS + MELEE_RANGE;
+    cbt.members.forEach((m) => {
+      if (!m.alive) return;
+      const dx = (m.tx ?? m.x) - m.x;
+      const dy = (m.ty ?? m.y) - m.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 0.5) {
+        const k = Math.min(1, step / d);
+        m.x += dx * k;
+        m.y += dy * k;
+        m.moveAcc += TICK;
+        m.moving = true;
+      } else m.moving = false;
+      if ((m.role === "Melee" || m.role === "Tank") && Math.hypot(m.x - bp.x, m.y - bp.y) > reach) {
+        m.outAcc += TICK;
+      }
+    });
+
+    cbt.hazards.forEach((h) => {
+      if (!h.followId) return;
+      const f = cbt.members.find((x) => x.id === h.followId);
+      if (f?.alive) {
+        h.x = f.x;
+        h.y = f.y;
+      }
+      if (h.mode === "drop") alertMembers(raid, boss, h);
+    });
+
+    const due = cbt.hazards.filter((h) => now >= h.at - 1e-6);
+    if (due.length) {
+      cbt.hazards = cbt.hazards.filter((h) => now < h.at - 1e-6);
+      const groups = new Map();
+      due.forEach((h) => {
+        if (!groups.has(h.castId)) groups.set(h.castId, []);
+        groups.get(h.castId).push(h);
+      });
+      groups.forEach((g) => detonateGroup(raid, boss, g));
+    }
+    pruneFx(cbt, now);
+  }
+
+  /** 지난 1초의 이동/사거리 이탈 비율 → 출력 배율 (호출 시 누적치 초기화) */
+  function takeMovementMult(m) {
+    const moveFrac = clamp(m.moveAcc || 0, 0, 1);
+    const outFrac = clamp(m.outAcc || 0, 0, 1);
+    m.moveAcc = 0;
+    m.outAcc = 0;
+    if (m.role === "Melee" || m.role === "Tank") return 1 - outFrac;
+    return 1 - moveFrac * (1 - (AR.moveOutputMult ?? 0.5));
+  }
+
   /**
    * Discrete combat simulation for one try.
    * Returns result object; also mutates combat state for live playback.
@@ -869,7 +1579,26 @@
         bursting: false,
         onCd: false,
         cdRemain: 0,
+        x: 0,
+        y: 0,
+        tx: null,
+        ty: null,
+        moving: false,
+        reactAt: null,
+        blunder: null,
+        dodgeBlunder: null,
+        returnAt: null,
+        task: null,
+        moveAcc: 0,
+        outAcc: 0,
+        mvMult: 1,
       };
+    });
+    const layout = computeLayout(members, boss.id);
+    members.forEach((m) => {
+      const hm = layout.homes[m.id] || { x: layout.cfg.boss.x, y: layout.cfg.boss.y + 120 };
+      m.x = m.tx = hm.x;
+      m.y = m.ty = hm.y;
     });
     const conditions = Object.fromEntries(members.map((m) => [m.id, m.condition]));
     const buffs = computeGameBuffs(members);
@@ -903,6 +1632,16 @@
       tankWipeAt: null,
       deathLog: [],
       rezLog: [],
+      sub: 0,
+      arena: layout.cfg,
+      bossPos: { x: layout.cfg.boss.x, y: layout.cfg.boss.y },
+      homes: layout.homes,
+      baseHomes: Object.fromEntries(Object.entries(layout.homes).map(([id, p]) => [id, { ...p }])),
+      pools: [],
+      hazards: [],
+      hazardSeq: 0,
+      fx: [],
+      activeTankId: members.find((m) => m.role === "Tank")?.id || null,
     };
     raid.logs = [];
     pushLog(raid, `Try #${raid.tries} — ${boss.nameKo || boss.name} 시작`);
@@ -938,6 +1677,8 @@
     const hitN = deaths.filter((d) => d.reason === "hit").length;
     const fatalN = deaths.filter((d) => d.reason === "fatal").length;
     const doubleN = deaths.filter((d) => d.reason === "double").length;
+    const soakN = deaths.filter((d) => d.reason === "soak").length;
+    const zoneN = deaths.filter((d) => d.reason === "zone" || d.reason === "pool").length;
     const total = deaths.length;
     if (cbt.enraged && (reason === "wipe" || total >= 5)) {
       return { key: "enrage", ko: "광폭화 이후 전멸", en: "Wipe after enrage" };
@@ -948,6 +1689,12 @@
         ko: "힐업 부족으로 말라죽는 사람 많음",
         en: "Many deaths from insufficient healing",
       };
+    }
+    if (soakN >= 3 && soakN >= zoneN) {
+      return { key: "soak", ko: "같이 맞는 바닥 인원 부족", en: "Not enough soakers" };
+    }
+    if (zoneN >= 3 && zoneN >= fatalN + doubleN) {
+      return { key: "zone", ko: "장판 회피 실패로 연쇄 사망", en: "Chain deaths from standing in zones" };
     }
     if (fatalN >= 3 && fatalN >= doubleN) {
       return { key: "fatal", ko: "즉사·생존 실패 다수", en: "Many fatal deaths" };
@@ -1078,7 +1825,7 @@
     m.lastDamageAt = atTime ?? 0;
     // 가피: 즉사=전량, 2배피격=정상 1히트 초과분, 일반 피격=0
     if (!m.avoidableTaken) m.avoidableTaken = 0;
-    if (reason === "fatal") {
+    if (reason === "fatal" || reason === "zone" || reason === "soak" || reason === "pool") {
       m.avoidableTaken += dmg;
     } else if (reason === "double") {
       const doubleMult = B.unit.doubleHitMult ?? 2;
@@ -1100,6 +1847,9 @@
           t: m.diedAt,
           reason: m.deathReason,
         });
+        m.moving = false;
+        m.reactAt = null;
+        pushFx(cbt, { kind: "death", x: m.x, y: m.y, dur: 1 });
       }
       if (raid) emitCombatEvent(raid, "death", { memberId: m.id, reason: m.deathReason });
       return true;
@@ -1124,14 +1874,19 @@
     }
   }
 
-  function tickCombat(raid, boss, dt = 1) {
+  /** steps = 0.1초(TICK) 단위 서브스텝 수. SUBSTEPS번마다 1초 로직(딜/힐/스킬 시전) */
+  function tickCombat(raid, boss, steps = SUBSTEPS) {
     const cbt = raid.combat;
     if (!cbt || cbt.finished) return cbt?.result || null;
-
-    const steps = Math.max(1, Math.round(dt));
-    for (let s = 0; s < steps; s++) {
-      if (cbt.finished) break;
-      _tickOneSecond(raid, boss);
+    for (let s = 0; s < steps && !cbt.finished; s++) {
+      cbt.sub = (cbt.sub || 0) + 1;
+      if (cbt.sub >= SUBSTEPS) {
+        cbt.sub = 0;
+        _tickOneSecond(raid, boss);
+        if (cbt.finished) break;
+      }
+      spatialStep(raid, boss);
+      if (!cbt.members.some((m) => m.alive)) finishTry(raid, boss, "wipe");
     }
     return cbt.result;
   }
@@ -1167,6 +1922,10 @@
 
     const livingNow = cbt.members.filter((m) => m.alive);
     if (!livingNow.length) return finishTry(raid, boss, "wipe");
+    ensureActiveTank(raid);
+    cbt.members.forEach((m) => {
+      m.mvMult = takeMovementMult(m);
+    });
 
     const hpPct = (cbt.bossHp / cbt.bossMaxHp) * 100;
     const phaseInfo = getPhase(boss, hpPct);
@@ -1186,7 +1945,8 @@
     const buffs = cbt.buffs || computeGameBuffs(cbt.members);
     livingNow.forEach((m) => {
       const cond = cbt.conditions[m.id];
-      const dps = calcFinalDPS(m, boss, phaseInfo.phase, cond, buffs) * getCooldownMult(m, cbt.t, raid);
+      const dps =
+        calcFinalDPS(m, boss, phaseInfo.phase, cond, buffs) * getCooldownMult(m, cbt.t, raid) * (m.mvMult ?? 1);
       m.dpsDone += dps;
       dpsSum += dps;
     });
@@ -1208,6 +1968,7 @@
         resolveBossSkill(raid, boss, phaseInfo, skill);
       }
     });
+    tickPools(raid);
 
     const livingAfterHit = cbt.members.filter((m) => m.alive);
     if (!livingAfterHit.length) {
@@ -1226,7 +1987,7 @@
       )
       .forEach((h) => {
         const cond = cbt.conditions[h.id];
-        const capacity = calcFinalHPS(h, boss, phaseInfo.phase, cond);
+        const capacity = calcFinalHPS(h, boss, phaseInfo.phase, cond) * (h.mvMult ?? 1);
         h.healCapacityDone = (h.healCapacityDone || 0) + capacity;
         const effective = applyHealerHps(cbt, h, capacity);
         h.hpsDone += effective;
@@ -1271,6 +2032,13 @@
       left: cbt.battleRezLeft,
     });
     if (cbt.members.some((m) => m.alive && m.role === "Tank")) cbt.tankWipeAt = null;
+    member.tx = member.x;
+    member.ty = member.y;
+    member.reactAt = null;
+    member.returnAt = null;
+    member.moveAcc = 0;
+    member.outAcc = 0;
+    if (cbt.fx) pushFx(cbt, { kind: "rez", x: member.x, y: member.y, dur: 1.2 });
     pushLog(raid, `전투부활 → ${member.name} (남은 ${cbt.battleRezLeft})`, "ok");
     emitCombatEvent(raid, "rez", { memberId: member.id });
     return true;
@@ -1368,12 +2136,31 @@
     return m.maxHp * pct * enrageAtk * (skill.hitMult ?? 1);
   }
 
+  /**
+   * 공간 형태별 처리
+   *  circle/cone/line : 예고 장판 생성 (폭발 판정은 spatialStep)
+   *  raid             : 피할 수 없는 전체 피해 (기존 2배 피격 주사위 유지 · 즉사 없음)
+   *  buster           : 메인탱 피격(생존기 타이밍 = 기존 2배/즉사 주사위) → 탱 교대
+   */
   function resolveBossSkill(raid, boss, phaseInfo, skill) {
     const cbt = raid.combat;
     if (!cbt || !skill) return;
+    const spec = spatialSpec(skill);
+    if (SPATIAL_SHAPES.has(spec.shape)) {
+      castSpatialSkill(raid, boss, phaseInfo, spec);
+      return;
+    }
     const living = cbt.members.filter((m) => m.alive);
-    const targets = selectSkillTargets(skill, living);
+    let targets;
+    if (spec.shape === "buster") {
+      const active = ensureActiveTank(raid);
+      const tanks = livingTanks(cbt).sort((a, b) => (a.id === active?.id ? -1 : b.id === active?.id ? 1 : 0));
+      targets = tanks.slice(0, Math.max(1, spec.count ?? 1));
+    } else {
+      targets = living;
+    }
     if (!targets.length) return;
+    const unavoidable = spec.shape === "raid";
 
     const kind = skillKind(skill);
     const doubleMult = B.unit.doubleHitMult ?? 2;
@@ -1392,7 +2179,7 @@
       const M = getProficiency(m, boss.id, phaseInfo.phase);
       const chances = hitChances(m.survivalScore, M);
       const pfDouble = Math.min(100, chances.pfDouble * doubleChanceMult);
-      const pfFatal = Math.min(100, chances.pfFatal * fatalMult);
+      const pfFatal = unavoidable ? 0 : Math.min(100, chances.pfFatal * fatalMult);
       const roll = rnd(0, 100);
       const baseHit = skillBaseHit(m, skill, enrageAtk);
       const drMult = m.role === "Tank" ? synDr * tankSaveDr : synDr;
@@ -1428,6 +2215,8 @@
       pushLog(raid, `[${kindKo}] ${label} → ${hitNames.join(", ")}`, "warn");
     }
     if (doubles) pushLog(raid, `2배 피격 ${doubles}명`, "warn");
+    if (unavoidable) pushFx(cbt, { kind: "pulse", x: cbt.bossPos.x, y: cbt.bossPos.y, dur: 0.9 });
+    else targets.forEach((m) => pushFx(cbt, { kind: "slam", memberId: m.id, x: m.x, y: m.y, dur: 0.7 }));
     emitCombatEvent(raid, "skill", {
       skillKind: kind,
       skillType: skill.type,
@@ -1435,6 +2224,7 @@
       deaths,
       doubles,
     });
+    if (spec.shape === "buster" && spec.swap !== false) swapTanks(raid);
   }
 
   function finishTry(raid, boss, reason) {
@@ -1737,7 +2527,7 @@
     this.startedOnce = false;
     this.phase = "recruit";
     this.speed = 1;
-    this.combatSpeed = B.sim.defaultCombatSpeed ?? 25;
+    this.combatSpeed = B.sim.defaultCombatSpeed ?? 2;
     this._combatAcc = 0;
     this._timer = null;
     this.onUpdate = opts.onUpdate || (() => {});
@@ -1831,15 +2621,14 @@
   };
 
   GameEngine.prototype._tickCombats = function (dt) {
-    // Accumulate fractional combat-seconds so Nx means N combat seconds per real second.
-    // (Old Math.max(1, round(...)) forced ≥1s per frame ≈ 30–60x at display refresh.)
-    this._combatAcc = (this._combatAcc || 0) + this.combatSpeed * dt;
-    const batch = Math.floor(this._combatAcc);
-    if (batch < 1) return;
-    this._combatAcc -= batch;
+    // Nx = 실시간 1초당 전투 N초. 탭 복귀 시 폭주 방지로 dt 상한
+    this._combatAcc = (this._combatAcc || 0) + this.combatSpeed * Math.min(dt, 0.25);
+    const steps = Math.floor(this._combatAcc / TICK + 1e-9);
+    if (steps < 1) return;
+    this._combatAcc -= steps * TICK;
     this.raids.forEach((r) => {
       if (r.state === "fighting" && r.combat && !r.combat.finished) {
-        const result = tickCombat(r, this.boss, batch);
+        const result = tickCombat(r, this.boss, steps);
         if (result?.ok) this._registerKill(r);
       }
     });
@@ -1885,6 +2674,26 @@
 
   GameEngine.prototype.relocate = function (candidateId, targetList, swapWithId) {
     return relocateMember(this.player, candidateId, targetList, swapWithId || null);
+  };
+
+  GameEngine.prototype.getMarkers = function () {
+    return getMarkers(this.player, this.boss.id);
+  };
+
+  /** kind: "square"(같이 맞는 바닥) | "cross"(장판 남기는 바닥) · 전투 중에도 즉시 반영 */
+  GameEngine.prototype.setMarker = function (kind, x, y) {
+    if (kind !== "square" && kind !== "cross") return;
+    const p = clampToBounds(arenaConfig(this.boss.id).bounds, x, y, 12);
+    if (!this.player.markers) this.player.markers = {};
+    const cur = this.player.markers[this.boss.id] || {};
+    this.player.markers[this.boss.id] = { ...cur, [kind]: { x: p.x, y: p.y } };
+  };
+
+  GameEngine.prototype.clearMarkers = function (kind) {
+    const cur = this.player.markers?.[this.boss.id];
+    if (!cur) return;
+    if (kind) delete cur[kind];
+    else delete this.player.markers[this.boss.id];
   };
 
   GameEngine.prototype.setBattleRezMode = function (mode) {
@@ -1968,6 +2777,17 @@
     healerTypeFromSpec,
     getCooldownMult,
     assignCdSec,
+  };
+  GameEngine.arena = {
+    TICK,
+    SUBSTEPS,
+    BOSS_RADIUS,
+    MELEE_RANGE,
+    config: arenaConfig,
+    layout: computeLayout,
+    pointInHazard,
+    combatNow,
+    getMarkers,
   };
 
   global.RaidGameEngine = GameEngine;

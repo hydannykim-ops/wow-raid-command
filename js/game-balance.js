@@ -389,7 +389,8 @@
      *  enrageSec : 이 시각 이후 피격 × enrageDamageMult (즉시 패배 아님)
      *
      *  phases[].skills[]
-     *    type     : tankBuster | random | aoe1 | aoe2 | raid
+     *    type     : tankBuster | random | aoe1 | aoe2 | raid | frontal | beam | shared | drop
+     *               (공간 형태는 arena.skillDefaults[type] · 스킬에 shape/radius/telegraph/fatal 등을 쓰면 덮어씀)
      *    interval : 시전 주기(초)
      *    hitMult  : unit.hitPct 배수 (쎈 스킬은 1.5~3)
      *    count    : random = 대상 수 / tankBuster = 맞을 탱 수 (생략=전원)
@@ -430,6 +431,7 @@
               { id: "tyrant_pulse", type: "aoe1", name: "Tyrant Pulse", nameKo: "폭군의 파동", interval: 8, hitMult: 1.1 },
               { id: "crush", type: "tankBuster", name: "Crush", nameKo: "분쇄", interval: 12, hitMult: 2.6 },
               { id: "marked_ruin", type: "random", name: "Marked Ruin", nameKo: "파멸 낙인", interval: 14, hitMult: 1.85, count: 3 },
+              { id: "tyrant_judgment", type: "shared", name: "Tyrant's Judgment", nameKo: "폭군의 심판", interval: 22, hitMult: 2.6, soakers: 5 },
             ],
           },
           {
@@ -441,6 +443,8 @@
               { id: "tyrant_nova", type: "aoe2", name: "Tyrant Nova", nameKo: "폭군 신성", interval: 11, hitMult: 1.55 },
               { id: "crush", type: "tankBuster", name: "Crush", nameKo: "분쇄", interval: 9, hitMult: 2.8 },
               { id: "marked_ruin", type: "random", name: "Marked Ruin", nameKo: "파멸 낙인", interval: 10, hitMult: 2.0, count: 4 },
+              { id: "tyrant_judgment", type: "shared", name: "Tyrant's Judgment", nameKo: "폭군의 심판", interval: 18, hitMult: 2.8, soakers: 5 },
+              { id: "ember_brand", type: "drop", name: "Ember Brand", nameKo: "잿불 낙인", interval: 20, hitMult: 1.0 },
             ],
           },
         ],
@@ -468,6 +472,7 @@
             skills: [
               { id: "echo_wave", type: "aoe1", name: "Echo Wave", nameKo: "메아리 파동", interval: 8, hitMult: 0.9 },
               { id: "twin_link", type: "random", name: "Twin Link", nameKo: "쌍생 연결", interval: 7, hitMult: 2.2, count: 2 },
+              { id: "echo_pool", type: "drop", name: "Echo Pool", nameKo: "메아리 웅덩이", interval: 18, hitMult: 0.8 },
             ],
           },
           {
@@ -479,6 +484,8 @@
               { id: "twin_link", type: "random", name: "Twin Link", nameKo: "쌍생 연결", interval: 6, hitMult: 2.0, count: 4 },
               { id: "echo_wave", type: "aoe1", name: "Echo Wave", nameKo: "메아리 파동", interval: 7, hitMult: 1.15 },
               { id: "resonance", type: "aoe2", name: "Resonance", nameKo: "공명", interval: 13, hitMult: 1.7 },
+              { id: "twin_verdict", type: "shared", name: "Twin Verdict", nameKo: "쌍생 심판", interval: 20, hitMult: 3.0, soakers: 6 },
+              { id: "echo_pool", type: "drop", name: "Echo Pool", nameKo: "메아리 웅덩이", interval: 16, hitMult: 0.8 },
             ],
           },
         ],
@@ -506,6 +513,7 @@
             skills: [
               { id: "swarm_bite", type: "aoe1", name: "Swarm Bite", nameKo: "무리의 이빨", interval: 6, hitMult: 1.05 },
               { id: "void_infest", type: "random", name: "Void Infest", nameKo: "공허 감염", interval: 12, hitMult: 1.55, count: 5 },
+              { id: "void_pool", type: "drop", name: "Void Pool", nameKo: "공허 웅덩이", interval: 16, hitMult: 0.8 },
             ],
           },
           {
@@ -516,6 +524,8 @@
               { id: "swarm_bite", type: "aoe1", name: "Swarm Bite", nameKo: "무리의 이빨", interval: 5, hitMult: 1.15 },
               { id: "devour", type: "tankBuster", name: "Devour", nameKo: "포식", interval: 14, hitMult: 5.0 },
               { id: "void_infest", type: "random", name: "Void Infest", nameKo: "공허 감염", interval: 8, hitMult: 4, count: 6 },
+              { id: "void_pool", type: "drop", name: "Void Pool", nameKo: "공허 웅덩이", interval: 18, hitMult: 0.8, count: 2 },
+              { id: "hive_crush", type: "shared", name: "Hive Crush", nameKo: "군락 압착", interval: 24, hitMult: 2.8, soakers: 5 },
             ],
           },
         ],
@@ -526,7 +536,96 @@
      * 11) 시뮬 기본 배속 (UI 기본값)
      * ========================================================= */
     sim: {
-      defaultCombatSpeed: 10,
+      defaultCombatSpeed: 2,
+      speedOptions: [1, 2, 4, 8],
+    },
+
+    /* =========================================================
+     * 11b) 전장 (공간 시뮬)
+     *
+     *  좌표: 오더 그림판과 동일한 1024×576 (px)
+     *  이동: tickSec 단위로 runSpeed(px/s)만큼 이동 · 딜/힐/스킬 시전은 1초 단위
+     *
+     *  반응 지연(초) = base + scale × (1 − 생존/100) × F(숙련) ± jitter
+     *    장판이 뜬 뒤 이만큼 지나서야 안전지대로 달리기 시작
+     *  멍때림 확률(%) = 기존 즉사확률(Pf_fatal) × blunderMult
+     *    → freeze(제자리) 또는 엉뚱한 방향
+     *  장판 판정: 터지는 순간 안에 있으면 2배 피격 (fatal 스킬은 즉사) · 밖이면 피해 없음
+     *
+     *  이동 손실: 원딜·힐러는 이동한 시간 비율만큼 출력 × moveOutputMult
+     *            근딜·탱은 보스 사거리(bossRadius + meleeRange) 밖에 있던 시간 비율만큼 딜 0
+     *
+     *  maps[bossId]: mapBossId(그림판 맵) · bounds(이동 가능 영역 circle|rect) · boss(위치, units=토큰 수)
+     *                · layout(이 보스만 배치 덮어쓰기)
+     *  skillDefaults: 스킬 type별 공간 형태 기본값 (스킬에 같은 키를 쓰면 덮어씀)
+     *    shape   : raid(피할 수 없는 전체 피해 · 2배 피격 주사위 적용) | buster(현재 탱 피격 + 탱 교대)
+     *              | circle | cone | line
+     *    at      : boss(보스 위치) | target(대상자 발밑)
+     *    radius / spread(부채꼴 각도°) / len / width / telegraph(예고 초) / fatal
+     * ========================================================= */
+    arena: {
+      tickSec: 0.1,
+      runSpeed: 55,
+      bossRadius: 26,
+      meleeRange: 48,
+      reaction: { base: 0.3, scale: 1.5, jitter: 0.2 },
+      blunderMult: 1,
+      moveOutputMult: 0.5,
+      returnDelay: 0.5,
+      safeMargin: 10,
+      layout: {
+        tankFront: 50,
+        offTankSide: 62,
+        meleeR: [44, 64],
+        meleeArc: 200,
+        rangedR: [175, 225],
+        healR: [125, 170],
+        rangedArc: 250,
+      },
+      maps: {
+        boss_tyrant: {
+          mapBossId: "nekzali",
+          bounds: { type: "circle", cx: 512, cy: 288, r: 236 },
+          boss: { x: 512, y: 250, units: 1 },
+        },
+        boss_twins: {
+          mapBossId: "entombed-sentinels",
+          bounds: { type: "rect", x0: 318, y0: 40, x1: 706, y1: 536 },
+          boss: { x: 512, y: 230, units: 2 },
+          layout: { meleeR: [54, 70], meleeArc: 180, tankFront: 56 },
+        },
+        boss_swarm: {
+          mapBossId: "sszorak",
+          bounds: { type: "circle", cx: 512, cy: 288, r: 250 },
+          boss: { x: 512, y: 250, units: 1 },
+        },
+      },
+      defaultBounds: { type: "circle", cx: 512, cy: 288, r: 236 },
+      skillDefaults: {
+        aoe1: { shape: "raid" },
+        raid: { shape: "raid" },
+        tankBuster: { shape: "buster", swap: true },
+        random: { shape: "circle", at: "target", radius: 52, telegraph: 3 },
+        soak: { shape: "circle", at: "target", radius: 52, telegraph: 3 },
+        aoe2: { shape: "circle", at: "boss", radius: 132, telegraph: 3.5 },
+        // 같이 맞는 바닥: 대상자 따라다님 · 네모 징표로 이동 · soakers명이 나눠 맞음 (모자라면 1인 피해↑, 0명이면 공대 전체)
+        shared: { shape: "circle", at: "target", mode: "shared", radius: 46, telegraph: 6, count: 1, soakers: 5, includeTanks: false },
+        // 장판 남기는 바닥: 대상자가 X 징표로 들고 감 → 폭발 후 웅덩이(poolSec초, 초당 maxHp×poolTickPct)
+        drop: {
+          shape: "circle",
+          at: "target",
+          mode: "drop",
+          radius: 40,
+          telegraph: 7,
+          count: 1,
+          includeTanks: false,
+          poolRadius: 52,
+          poolSec: 40,
+          poolTickPct: 0.08,
+        },
+        frontal: { shape: "cone", at: "boss", len: 300, spread: 60, telegraph: 3 },
+        beam: { shape: "line", at: "boss", len: 520, width: 54, telegraph: 3 },
+      },
     },
 
     /* =========================================================

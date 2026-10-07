@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WoW Raid Command</title>
+  <title>레이드 지휘실</title>
   <script>
     try {
       var t = localStorage.getItem("wow-raid-theme");
@@ -30,7 +30,7 @@
         <span class="back-btn hidden" id="backHome" aria-hidden="true">←</span>
         <span class="crest" aria-hidden="true"></span>
         <span class="brand-copy">
-          <span class="eyebrow">RAID COMMAND CENTER</span>
+          <span class="eyebrow">RAID COMMAND ROOM</span>
           <span class="title" data-i18n="homeTitle"></span>
           <span class="patch" id="patch"></span>
         </span>
@@ -59,7 +59,6 @@
 
     <main id="homeView">
       <section class="hub">
-        <p class="hub-lead" data-i18n="homeSub"></p>
         <div class="hub-board">
           <a class="hub-feature" href="/planner" data-view="planner">
             <span class="hub-shot">
@@ -219,6 +218,10 @@
       </section>
     </main>
 
+    <p class="site-contact">
+      <span data-i18n="contactNote"></span>
+      <a href="mailto:contact@raidcommandcenter.com">contact@raidcommandcenter.com</a>
+    </p>
   </div>
 
   <div id="celebrateOverlay" class="celebrate-overlay hidden" aria-hidden="true">
@@ -238,6 +241,7 @@
   <script src="js/game-balance.js"></script>
   <script src="js/game-engine.js"></script>
   <script src="js/game-fx.js"></script>
+  <script src="js/game-arena.js"></script>
   <script src="js/game-ui.js"></script>
   <script src="js/planner-catalog.js"></script>
   <script src="js/wcl-client.js"></script>

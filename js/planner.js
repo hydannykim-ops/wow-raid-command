@@ -69,6 +69,14 @@
   const TEMP_RAID_ID = "temp-helper";
   let localRoster = [];
   let localBench = [];
+  let editRoster = [];
+  let editBench = [];
+  const ROSTER_CAP_MIN = 10;
+  const ROSTER_CAP_MAX = 30;
+  let rosterCap = 20;
+  let editRosterCap = 20;
+  let rosterDirty = false;
+  let rosterClosePrompt = false;
   let bossId = "nekzali";
   let duration = 360;
   let zoom = 3;
@@ -103,6 +111,9 @@
   let assignmentsByBoss = {};
   let assignmentsBossId = bossId;
   let activeRaidId = null;
+  /** 지금 워크스페이스를 연 계정 id. 비로그인이면 "". 다른 사람 공대가 브라우저에 남는 걸 막는다. */
+  let workspaceOwnerId = null;
+  let authWorkspaceQueue = Promise.resolve();
   let savedRaids = [];
   let raidBusy = false;
   let raidSaveTimer = null;
@@ -265,11 +276,11 @@
 
   function renderPlanPages() {
     const btns = Array.from({ length: PLAN_PAGE_COUNT }, (_, i) => {
-      const on = i === planPage ? "on" : "";
-      return `<button type="button" class="ghost ${on}" data-rp="plan-page" data-id="${i}" aria-pressed="${on ? "true" : "false"}">${i + 1}</button>`;
+      const on = i === planPage;
+      return `<button type="button" class="ghost${on ? " on" : ""}" data-rp="plan-page" data-id="${i}" role="tab" aria-selected="${on ? "true" : "false"}"${on ? ` aria-current="page"` : ""}>${i + 1}</button>`;
     }).join("");
     return `<div class="rp-plan-pages" role="tablist" aria-label="${t("쿨기 페이지", "CD page")}">
-      <span>${t("페이지", "Page")}</span>
+      <span>${t("페이지", "Page")} <b>${planPage + 1}</b></span>
       ${btns}
     </div>`;
   }
@@ -326,6 +337,9 @@
   let paletteTab = "elements"; // roster | elements | boss
   let stamp = null; // { kind: "player"|"element"|"boss", id }
   let handlePreviewId = null; // 방금 깐 토큰: 선택 없이 조절 핸들만 표시
+  let textEditor = null; // { id, fresh, original, undoPushed, closing }
+  let boardPainting = false;
+  let textEditorRepaint = false;
   let boardMapId = null; // 다중 맵(울라텍 페이즈 등) 선택 id
   /** 보스별 오더 그림판. 현재 보스 보드는 steps/stepId/boardMapId 에 있고, 나머지 보스는 여기 보관 */
   let boardsByBoss = {};
@@ -678,7 +692,8 @@
     if (!player) return "";
     const nick = memberNick(player);
     if (nick) return nick;
-    const same = [...localRoster, ...localBench].filter((m) => m.class === player.class);
+    const pool = rosterOpen ? [...editRoster, ...editBench] : [...localRoster, ...localBench];
+    const same = pool.filter((m) => m.class === player.class);
     const idx = same.findIndex((m) => m.playerId === player.playerId);
     return `${classShort(player.class)}${Math.max(1, idx + 1)}`;
   }
@@ -696,24 +711,134 @@
     return localRoster;
   }
 
-  function buildDemoRoster() {
-    localRoster = DEMO_SPECS.map(([cls, spec], i) => {
+  function cloneMembers(list) {
+    return (list || []).map((m) => ({ ...m }));
+  }
+
+  function clampRosterCap(n) {
+    const v = Math.round(Number(n));
+    if (!Number.isFinite(v)) return 20;
+    return Math.min(ROSTER_CAP_MAX, Math.max(ROSTER_CAP_MIN, v));
+  }
+
+  function activeCap() {
+    return rosterOpen ? editRosterCap : rosterCap;
+  }
+
+  function trimRosterToCap(roster, bench, cap) {
+    if (!roster || roster.length <= cap) return;
+    bench.unshift(...roster.splice(cap));
+  }
+
+  function setRosterCap(n) {
+    const next = clampRosterCap(n);
+    if (rosterOpen) {
+      const before = editRoster.length;
+      trimRosterToCap(editRoster, editBench, next);
+      if (next !== editRosterCap || editRoster.length !== before) rosterDirty = true;
+      editRosterCap = next;
+      return;
+    }
+    trimRosterToCap(localRoster, localBench, next);
+    rosterCap = next;
+    editRosterCap = next;
+  }
+
+  function placeRoster(next) {
+    const cap = clampRosterCap(Math.max(activeCap(), Math.min(next.length, ROSTER_CAP_MAX)));
+    const active = next.slice(0, cap);
+    const bench = next.slice(cap);
+    if (rosterOpen) {
+      editRosterCap = cap;
+      editRoster = active;
+      editBench = bench;
+      rosterDirty = true;
+      return;
+    }
+    rosterCap = cap;
+    editRosterCap = cap;
+    localRoster = active;
+    localBench = bench;
+  }
+
+  function beginRosterEdit() {
+    editRoster = cloneMembers(localRoster);
+    editBench = cloneMembers(localBench);
+    editRosterCap = rosterCap;
+    rosterDirty = false;
+    rosterClosePrompt = false;
+  }
+
+  function discardRosterEdit() {
+    editRoster = cloneMembers(localRoster);
+    editBench = cloneMembers(localBench);
+    editRosterCap = rosterCap;
+    rosterDirty = false;
+    rosterEditId = null;
+  }
+
+  function commitRosterEdit() {
+    localRoster = cloneMembers(editRoster);
+    localBench = cloneMembers(editBench);
+    rosterCap = editRosterCap;
+    pruneAssignmentsToRoster();
+    dropUnusableAssignments();
+    rosterDirty = false;
+  }
+
+  function confirmDiscardRosterDraft() {
+    if (!rosterDirty) return true;
+    return window.confirm(
+      t("저장하지 않은 공대 구성이 있습니다. 버릴까요?", "Discard unsaved roster changes?")
+    );
+  }
+
+  function openRosterModal() {
+    beginRosterEdit();
+    rosterOpen = true;
+  }
+
+  function finishCloseRosterModal() {
+    rosterOpen = false;
+    rosterEditId = null;
+    rosterDirty = false;
+    rosterClosePrompt = false;
+  }
+
+  function requestCloseRoster() {
+    if (!rosterOpen) return;
+    if (!rosterDirty) {
+      discardRosterEdit();
+      finishCloseRosterModal();
+      renderCd();
+      saveState();
+      return;
+    }
+    rosterClosePrompt = true;
+    renderCd();
+  }
+
+  function demoMembers() {
+    return DEMO_SPECS.map(([cls, spec], i) => {
       const found = specs().find((s) => s.class === cls && s.spec === spec);
       if (!found) return null;
       return { ...found, playerId: `demo-${i}`, nick: "", server: DEFAULT_REALM };
     }).filter(Boolean);
-    localBench = [];
+  }
+
+  function buildDemoRoster() {
+    const next = demoMembers();
     rosterMode = "demo";
-    pruneAssignmentsToRoster();
+    placeRoster(next);
+    if (!rosterOpen) pruneAssignmentsToRoster();
   }
 
   function importHelperRoster() {
     const fromHelper = helperRosterRef() || [];
     if (!fromHelper.length) return false;
-    const prev = new Map(
-      [...localRoster, ...localBench].map((m) => [m.playerId, { nick: m.nick || "", server: memberRealm(m) }])
-    );
-    localRoster = fromHelper.map((s, i) => {
+    const prevSrc = rosterOpen ? [...editRoster, ...editBench] : [...localRoster, ...localBench];
+    const prev = new Map(prevSrc.map((m) => [m.playerId, { nick: m.nick || "", server: memberRealm(m) }]));
+    const next = fromHelper.map((s, i) => {
       const playerId = s.instanceId || `h-${i}`;
       const keep = prev.get(playerId) || {};
       return {
@@ -723,8 +848,9 @@
         server: keep.server || normalizeRealm(s.server) || DEFAULT_REALM,
       };
     });
-    localBench = [];
     rosterMode = "helper";
+    placeRoster(next);
+    if (rosterOpen) return true;
     activeRaidId = null;
     pruneAssignmentsToRoster();
     dropUnusableAssignments();
@@ -758,11 +884,12 @@
   }
 
   function findRosterMember(playerId) {
-    return (
-      localRoster.find((m) => m.playerId === playerId) ||
-      localBench.find((m) => m.playerId === playerId) ||
-      null
-    );
+    const lists = rosterOpen ? [editRoster, editBench] : [localRoster, localBench];
+    for (const list of lists) {
+      const hit = list.find((m) => m.playerId === playerId);
+      if (hit) return hit;
+    }
+    return null;
   }
 
   function memberIconHtml(m) {
@@ -776,6 +903,14 @@
 
   function removeMember(playerId) {
     if (!playerId) return;
+    if (rosterOpen) {
+      editRoster = editRoster.filter((m) => m.playerId !== playerId);
+      editBench = editBench.filter((m) => m.playerId !== playerId);
+      rosterDirty = true;
+      if (selectedPlayerId === playerId) selectedPlayerId = null;
+      if (rosterEditId === playerId) rosterEditId = null;
+      return;
+    }
     localRoster = localRoster.filter((m) => m.playerId !== playerId);
     localBench = localBench.filter((m) => m.playerId !== playerId);
     dropPlayerAssignments(playerId);
@@ -783,22 +918,32 @@
   }
 
   function moveMemberToBench(playerId) {
-    const idx = localRoster.findIndex((m) => m.playerId === playerId);
+    const roster = rosterOpen ? editRoster : localRoster;
+    const bench = rosterOpen ? editBench : localBench;
+    const idx = roster.findIndex((m) => m.playerId === playerId);
     if (idx < 0) return;
-    const [m] = localRoster.splice(idx, 1);
-    localBench.push(m);
+    const [m] = roster.splice(idx, 1);
+    bench.push(m);
+    if (rosterOpen) {
+      rosterDirty = true;
+      return;
+    }
     dropPlayerAssignments(playerId);
   }
 
   function moveMemberToActive(playerId) {
-    const idx = localBench.findIndex((m) => m.playerId === playerId);
+    const roster = rosterOpen ? editRoster : localRoster;
+    const bench = rosterOpen ? editBench : localBench;
+    const idx = bench.findIndex((m) => m.playerId === playerId);
     if (idx < 0) return;
-    if (localRoster.length >= 20) {
-      window.alert(t("선발은 최대 20명입니다.", "Active roster is capped at 20."));
+    const cap = activeCap();
+    if (roster.length >= cap) {
+      window.alert(t(`선발은 최대 ${cap}명입니다.`, `Active roster is capped at ${cap}.`));
       return;
     }
-    const [m] = localBench.splice(idx, 1);
-    localRoster.push(m);
+    const [m] = bench.splice(idx, 1);
+    roster.push(m);
+    if (rosterOpen) rosterDirty = true;
   }
 
   function addSpecToRoster(className, specName) {
@@ -811,9 +956,12 @@
       server: DEFAULT_REALM,
       color: found.color || classColor(found.class),
     };
-    if (localRoster.length < 20) localRoster.push(member);
-    else localBench.push(member);
+    const roster = rosterOpen ? editRoster : localRoster;
+    const bench = rosterOpen ? editBench : localBench;
+    if (roster.length < activeCap()) roster.push(member);
+    else bench.push(member);
     selectedPlayerId = member.playerId;
+    if (rosterOpen) rosterDirty = true;
   }
 
   function memberProvides(member, spell) {
@@ -1297,17 +1445,17 @@
     });
   }
 
-  function renderCdBandCell(conflict, colspan, fromEv, toEv) {
+  function renderCdBandCell(conflict, colspan, fromEv, toEv, sp, player) {
     const title = escapeAttr(
-      cellBlockedTitle(conflict) +
-        (fromEv && toEv && fromEv.id !== toEv.id
-          ? ` · ${fmtTime(fromEv.t)}–${fmtTime(toEv.t)}`
-          : "")
+      t("클릭하면 배치됩니다. 쿨이 겹치면 타임라인에 표시됩니다.", "Click to place. Overlaps show on the timeline.") +
+        (fromEv && toEv && fromEv.id !== toEv.id ? ` · ${fmtTime(fromEv.t)}–${fmtTime(toEv.t)}` : "")
     );
     const ready = conflict?.readyAt != null ? fmtTime(conflict.readyAt) : "";
+    const tSec = fromEv?.t ?? 0;
+    const evId = fromEv?.id || "";
     return `<td colspan="${colspan}" class="rp-cd-span">
-      <div class="rp-cell blocked band" title="${title}">
-        <span class="rp-cd-band-label">${ready ? t(`${ready}부터`, `from ${ready}`) : "CD"}</span>
+      <div class="rp-cell blocked band" role="button" tabindex="0" data-rp="assign-cell" data-t="${tSec}" data-event="${evId}" data-spell="${sp.id}" data-player="${player.playerId}" title="${title}">
+        <span class="rp-cd-band-label">${ready ? t(`${ready}부터 · 겹쳐 넣기`, `from ${ready} · place anyway`) : t("겹쳐 넣기", "Place anyway")}</span>
       </div>
     </td>`;
   }
@@ -1540,68 +1688,144 @@
     ];
   }
 
-  function loadState() {
+  function currentAuthId() {
+    return global.RaidAuth?.user?.()?.id || "";
+  }
+
+  function wipeLegacyPlannerCache() {
     try {
-      const raw = localStorage.getItem(STORE_KEY);
-      if (!raw) return;
-      const data = JSON.parse(raw);
-      tool = data.tool === "board" ? "board" : "cd";
-      bossId = data.bossId || bossId;
-      const knownBosses = catalog()?.bosses || [];
-      if (knownBosses.length && !knownBosses.some((b) => b.id === bossId)) {
-        bossId = knownBosses[0].id;
-      }
-      duration = data.duration || duration;
-      zoom = data.zoom
-        ? clampZoom(Number(data.zoom) > 5 ? 900 / Math.max(1, data.duration || duration) : data.zoom)
-        : zoom;
-      collapsedCats =
-        data.collapsedCats && typeof data.collapsedCats === "object" ? data.collapsedCats : {};
-      rosterOpen = data.rosterOpen === true;
-      rosterMode = data.rosterMode || rosterMode;
-      activeRaidId = data.activeRaidId || null;
-      const storedRoster = Array.isArray(data.localRoster) ? data.localRoster : null;
-      const autoDemo =
-        rosterMode === "demo" &&
-        data.demoKept !== true &&
-        storedRoster &&
-        storedRoster.length > 0 &&
-        storedRoster.every((m) => String(m.playerId || "").startsWith("demo-"));
-      if (autoDemo) {
-        rosterMode = "empty";
-        localRoster = [];
-        localBench = [];
-        activeRaidId = null;
-      } else {
-        localRoster = Array.isArray(data.localRoster)
-          ? data.localRoster.map((m) => ({
-              ...m,
-              nick: m.nick || "",
-              server: normalizeRealm(m.server),
-            }))
-          : localRoster;
-        localBench = Array.isArray(data.localBench)
-          ? data.localBench.map((m) => ({
-              ...m,
-              nick: m.nick || "",
-              server: normalizeRealm(m.server),
-            }))
-          : [];
-      }
-      if (autoDemo) {
-        planPages = normalizePages(null);
-        planPage = 0;
-        hydratePage(blankPlanPage());
-      } else {
-        applyPagesFromPlan(data);
-      }
-      if (data.board) {
-        boardTool = data.board.tool && data.board.tool !== "pan" ? data.board.tool : "select";
-        boardColor = data.board.color || boardColor;
-      }
-      if (autoDemo) saveState();
+      localStorage.removeItem(STORE_KEY);
     } catch (_) {
-      /* ignore broken cache */
+      /* ignore */
+    }
+  }
+
+  function readPlannerPrefs(uid) {
+    if (!uid) return null;
+    try {
+      const data = JSON.parse(localStorage.getItem(`${STORE_KEY}:${uid}`) || "null");
+      return data && typeof data === "object" ? data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function writePlannerPrefs() {
+    const uid = currentAuthId();
+    if (!uid || shareReadonly) return;
+    try {
+      localStorage.setItem(
+        `${STORE_KEY}:${uid}`,
+        JSON.stringify({
+          version: 3,
+          tool,
+          bossId,
+          duration,
+          zoom,
+          collapsedCats,
+          rosterCap,
+          activeRaidId,
+          planPage,
+        })
+      );
+    } catch (_) {
+      /* quota */
+    }
+  }
+
+  function applyPlannerPrefs(data) {
+    if (!data || typeof data !== "object") return;
+    if (data.tool === "board" || data.tool === "cd") tool = data.tool;
+    if (data.bossId) bossId = data.bossId;
+    const knownBosses = catalog()?.bosses || [];
+    if (knownBosses.length && !knownBosses.some((b) => b.id === bossId)) {
+      bossId = knownBosses[0].id;
+    }
+    if (data.duration) duration = data.duration;
+    if (data.zoom) {
+      zoom = clampZoom(Number(data.zoom) > 5 ? 900 / Math.max(1, data.duration || duration) : data.zoom);
+    }
+    if (data.collapsedCats && typeof data.collapsedCats === "object") collapsedCats = data.collapsedCats;
+    if (data.rosterCap) {
+      rosterCap = clampRosterCap(data.rosterCap);
+      editRosterCap = rosterCap;
+    }
+  }
+
+  function resetPlannerWorkspace() {
+    rosterMode = "empty";
+    localRoster = [];
+    localBench = [];
+    editRoster = [];
+    editBench = [];
+    rosterDirty = false;
+    rosterClosePrompt = false;
+    rosterOpen = false;
+    rosterEditId = null;
+    activeRaidId = null;
+    savedRaids = [];
+    rosterCap = 20;
+    editRosterCap = 20;
+    planPages = normalizePages(null);
+    planPage = 0;
+    hydratePage(blankPlanPage());
+    wclPick = null;
+    wclOpen = false;
+    wclBulk = null;
+    nsrtModal = null;
+    shareModal = null;
+  }
+
+  function applyAuthWorkspace() {
+    const run = authWorkspaceQueue.then(syncAuthWorkspace, syncAuthWorkspace);
+    authWorkspaceQueue = run.then(
+      () => {},
+      () => {}
+    );
+    return run;
+  }
+
+  async function syncAuthWorkspace() {
+    if (shareReadonly) {
+      await refreshSavedRaids();
+      return;
+    }
+    const uid = currentAuthId();
+    const logged = Boolean(global.RaidStore?.isLoggedIn());
+    const owner = logged ? uid : "";
+    if (workspaceOwnerId === owner) {
+      await refreshSavedRaids();
+      return;
+    }
+    workspaceOwnerId = owner;
+    wipeLegacyPlannerCache();
+    resetPlannerWorkspace();
+    if (!logged) {
+      await refreshSavedRaids();
+      return;
+    }
+    const prefs = readPlannerPrefs(uid);
+    applyPlannerPrefs(prefs);
+    await refreshSavedRaids();
+    const remembered = prefs?.activeRaidId;
+    const listed =
+      (remembered && savedRaids.find((r) => r.id === remembered)) || savedRaids[0] || null;
+    if (!listed) {
+      tool = "cd";
+      return;
+    }
+    try {
+      const raid = (await global.RaidStore.get(listed.id)) || listed;
+      if (workspaceOwnerId !== owner) return;
+      if (raid) {
+        applySavedRaid(raid);
+        writePlannerPrefs();
+      }
+    } catch (_) {
+      if (listed.plan || listed.members?.length) {
+        applySavedRaid(listed);
+        writePlannerPrefs();
+      } else tool = "cd";
     }
   }
 
@@ -1610,30 +1834,7 @@
     clearTimeout(persistTimer);
     persistTimer = setTimeout(() => {
       snapshotCurrentPage();
-      const payload = {
-        version: 2,
-        tool,
-        bossId,
-        duration,
-        zoom,
-        collapsedCats,
-        rosterOpen,
-        rosterMode,
-        demoKept: rosterMode === "demo",
-        activeRaidId,
-        pageIndex: planPage,
-        pages: planPages,
-        localRoster,
-        localBench,
-        assignmentsByBoss: { ...assignmentsByBoss, [assignmentsBossId]: assignments },
-        boardsByBoss: { ...boardsByBoss, [boardBossId || bossId]: { steps, stepId, mapId: boardMapId } },
-        board: { tool: boardTool, color: boardColor },
-      };
-      try {
-        localStorage.setItem(STORE_KEY, JSON.stringify(payload));
-      } catch (_) {
-        /* quota */
-      }
+      writePlannerPrefs();
       scheduleRaidPersist();
     }, 120);
   }
@@ -1665,18 +1866,21 @@
     return (list || []).map((m, i) => hydrateMember(m, i, prefix)).filter(Boolean);
   }
 
-  function currentPlanSnapshot() {
+  function currentPlanSnapshot(lists) {
     snapshotCurrentPage();
+    const roster = lists?.active || localRoster;
+    const bench = lists?.bench || localBench;
     return {
       version: 2,
       bossId,
       zoom,
       collapsedCats,
       tool,
+      rosterCap,
       pageIndex: planPage,
       pages: planPages,
-      localRoster: localRoster.map(slimMember),
-      localBench: localBench.map(slimMember),
+      localRoster: roster.map(slimMember),
+      localBench: bench.map(slimMember),
       assignmentsByBoss: { ...assignmentsByBoss, [assignmentsBossId]: assignments },
       boardsByBoss: { ...boardsByBoss, [boardBossId || bossId]: { steps, stepId, mapId: boardMapId } },
     };
@@ -1687,6 +1891,10 @@
     const rosterSrc = Array.isArray(data.localRoster) && data.localRoster.length ? data.localRoster : membersFallback;
     localRoster = hydrateMembers(rosterSrc, "raid");
     localBench = hydrateMembers(data.localBench, "bench");
+    if (data.rosterCap) {
+      rosterCap = clampRosterCap(data.rosterCap);
+      editRosterCap = rosterCap;
+    }
     rosterMode = "saved";
     if (data.bossId) bossId = data.bossId;
     const knownBosses = catalog()?.bosses || [];
@@ -1702,8 +1910,29 @@
   function applySavedRaid(raid) {
     if (!raid) return false;
     applyPlanSnapshot(raid.plan, raid.members);
+    if (!(raid.plan && raid.plan.rosterCap) && raid.size) {
+      rosterCap = clampRosterCap(raid.size);
+      editRosterCap = rosterCap;
+    }
     activeRaidId = raid.id;
+    if (rosterOpen) beginRosterEdit();
     return true;
+  }
+
+  function blankRaidPlan() {
+    return {
+      version: 2,
+      bossId,
+      zoom,
+      collapsedCats,
+      tool: "cd",
+      pageIndex: 0,
+      pages: normalizePages(null),
+      localRoster: [],
+      localBench: [],
+      assignmentsByBoss: {},
+      boardsByBoss: {},
+    };
   }
 
   function boardShareSnapshot() {
@@ -1871,15 +2100,19 @@
 
   function scheduleRaidPersist() {
     if (shareReadonly) return;
+    if (rosterOpen && rosterDirty) return;
     if (!activeRaidId || !global.RaidStore?.isLoggedIn() || raidBusy) return;
     clearTimeout(raidSaveTimer);
     raidSaveTimer = setTimeout(() => {
+      if (raidBusy) return;
       persistActiveRaid({ quiet: true });
     }, 700);
   }
 
   async function persistActiveRaid(opts) {
     const quiet = opts?.quiet;
+    const empty = Boolean(opts?.empty);
+    clearTimeout(raidSaveTimer);
     if (!global.RaidStore?.isLoggedIn()) {
       if (!quiet) window.alert(t("로그인하면 내 공대를 저장할 수 있습니다.", "Log in to save your raids."));
       return null;
@@ -1891,20 +2124,38 @@
     const id = opts?.asNew ? undefined : opts?.id || activeRaidId || undefined;
     raidBusy = true;
     try {
+      const membersSrc = empty ? [] : Array.isArray(opts?.members) ? opts.members : localRoster;
+      const plan = empty ? blankRaidPlan() : opts?.plan || currentPlanSnapshot();
       const saved = await global.RaidStore.save({
         id,
         name,
-        size: 20,
-        members: localRoster.map(slimMember),
-        plan: currentPlanSnapshot(),
+        size: rosterCap,
+        members: membersSrc.map(slimMember),
+        plan,
       });
       activeRaidId = saved.id;
+      if (empty) {
+        applyPlanSnapshot(plan, []);
+        beginRosterEdit();
+      } else if (opts?.switchTo) {
+        applyPlanSnapshot(plan, membersSrc);
+        beginRosterEdit();
+      }
       await refreshSavedRaids();
       if (!quiet) {
-        window.alert(t("이 공대의 구성·쿨기·오더를 저장했습니다.", "Saved roster, cooldowns, and order board."));
+        window.alert(
+          empty
+            ? t("새 공대를 만들었습니다. 구성원을 넣고 저장하세요.", "Created a new raid. Add members, then save.")
+            : opts?.cloned
+              ? t("지금 구성원으로 새 공대를 만들었습니다.", "Created a new raid with the current roster.")
+              : opts?.renamed
+                ? t("공대 이름을 바꿨습니다.", "Raid name updated.")
+                : t("이 공대의 구성·쿨기·오더를 저장했습니다.", "Saved roster, cooldowns, and order board.")
+        );
       }
       return saved;
     } catch (err) {
+      if (err.status === 404 && id && !opts?.asNew) activeRaidId = null;
       if (!quiet) {
         window.alert(
           err.status === 409
@@ -1918,8 +2169,109 @@
     }
   }
 
+  async function saveActiveRoster() {
+    if (rosterOpen) commitRosterEdit();
+    if (!global.RaidStore?.isLoggedIn()) return true;
+    if (!activeRaidId) {
+      const fallback = t(`내 공대 ${savedRaids.length + 1}`, `Raid ${savedRaids.length + 1}`);
+      const name = window.prompt(t("공대 이름", "Raid name"), fallback);
+      if (!name) {
+        if (rosterOpen) beginRosterEdit();
+        return true;
+      }
+      await persistActiveRaid({ asNew: true, name: name.trim().slice(0, 80) });
+      if (rosterOpen) beginRosterEdit();
+      return true;
+    }
+    await persistActiveRaid();
+    if (rosterOpen) beginRosterEdit();
+    return true;
+  }
+
+  async function createBlankRaid() {
+    if (!global.RaidStore?.isLoggedIn()) {
+      window.alert(t("로그인하면 새 공대를 만들 수 있습니다.", "Log in to create a new raid."));
+      return;
+    }
+    const max = global.RaidStore?.MAX || 10;
+    if (savedRaids.length >= max) {
+      window.alert(t("내 공대는 최대 10개입니다. 하나를 지운 뒤 만드세요.", "You can keep up to 10 raids. Delete one first."));
+      return;
+    }
+    const fallback = t(`내 공대 ${savedRaids.length + 1}`, `Raid ${savedRaids.length + 1}`);
+    const name = window.prompt(t("새 공대 이름", "New raid name"), fallback);
+    if (!name) return;
+    if (!confirmDiscardRosterDraft()) return;
+    if (activeRaidId) await persistActiveRaid({ quiet: true, id: activeRaidId });
+    const saved = await persistActiveRaid({ asNew: true, name: name.trim().slice(0, 80), empty: true });
+    if (!saved) return;
+    rosterOpen = true;
+    renderCd();
+    saveState();
+  }
+
+  async function duplicateRaid() {
+    if (!global.RaidStore?.isLoggedIn()) {
+      window.alert(t("로그인하면 공대를 복제할 수 있습니다.", "Log in to duplicate a raid."));
+      return;
+    }
+    const max = global.RaidStore?.MAX || 10;
+    if (savedRaids.length >= max) {
+      window.alert(t("내 공대는 최대 10개입니다. 하나를 지운 뒤 복제하세요.", "You can keep up to 10 raids. Delete one first."));
+      return;
+    }
+    const members = cloneMembers(rosterOpen ? editRoster : localRoster);
+    const bench = cloneMembers(rosterOpen ? editBench : localBench);
+    if (!members.length && !bench.length) {
+      window.alert(t("복제할 구성원이 없습니다.", "There is no roster to duplicate."));
+      return;
+    }
+    const srcName = activeRaidName() || t("내 공대", "My raid");
+    const fallback = t(`${srcName} 복사`, `Copy of ${srcName}`);
+    const name = window.prompt(t("복제된 공대 이름", "Duplicated raid name"), fallback);
+    if (!name) return;
+    if (activeRaidId) await persistActiveRaid({ quiet: true, id: activeRaidId });
+    const plan = currentPlanSnapshot({ active: members, bench });
+    const saved = await persistActiveRaid({
+      asNew: true,
+      name: name.trim().slice(0, 80),
+      members,
+      plan,
+      switchTo: true,
+      cloned: true,
+    });
+    if (!saved) return;
+    rosterOpen = true;
+    renderCd();
+    saveState();
+  }
+
+  async function renameActiveRaid() {
+    if (!global.RaidStore?.isLoggedIn()) {
+      window.alert(t("로그인하면 공대 이름을 바꿀 수 있습니다.", "Log in to rename a raid."));
+      return;
+    }
+    if (!activeRaidId) {
+      window.alert(t("먼저 공대를 저장하세요.", "Save the raid first."));
+      return;
+    }
+    const current = activeRaidName() || t("내 공대", "My raid");
+    const name = window.prompt(t("공대 이름", "Raid name"), current);
+    if (!name) return;
+    const next = name.trim().slice(0, 80);
+    if (!next || next === current) return;
+    const saved = await persistActiveRaid({ name: next, renamed: true });
+    if (!saved) return;
+    renderCd();
+    saveState();
+  }
+
   async function loadSavedRaid(id) {
     if (!id) return;
+    if (!confirmDiscardRosterDraft()) {
+      renderCd();
+      return;
+    }
     if (activeRaidId && activeRaidId !== id && global.RaidStore?.isLoggedIn()) {
       await persistActiveRaid({ quiet: true, id: activeRaidId });
     }
@@ -1931,6 +2283,13 @@
     applySavedRaid(raid);
     render(true);
     saveState();
+  }
+
+  function raidMemberCount(r) {
+    if (!r) return 0;
+    if (Array.isArray(r.members) && r.members.length) return r.members.length;
+    if (Array.isArray(r.plan?.localRoster) && r.plan.localRoster.length) return r.plan.localRoster.length;
+    return Number(r.size) || 0;
   }
 
   function activeRaidName() {
@@ -1946,7 +2305,7 @@
       .map(
         (r) =>
           `<option value="${escapeAttr(r.id)}" ${r.id === activeRaidId ? "selected" : ""}>${escapeAttr(
-            `${r.name} (${(r.members && r.members.length) || r.size || 0})`
+            `${r.name} (${raidMemberCount(r)})`
           )}</option>`
       )
       .join("");
@@ -1975,9 +2334,10 @@
           <span>${t("내 공대", "My raids")}</span>
           <select data-rp="raid-pick" ${logged ? "" : "disabled"}>${options}</select>
         </label>
-        ${renderPlanPages()}
-        <button type="button" class="primary" data-rp="raid-save" ${logged ? "" : "disabled"}>${t("저장", "Save")}</button>
-        <button type="button" class="ghost" data-rp="raid-save-new" ${logged ? "" : "disabled"}>${t("새로 저장", "Save as")}</button>
+        <button type="button" class="primary" data-rp="raid-save">${t("저장", "Save")}${rosterDirty ? " *" : ""}</button>
+        <button type="button" class="ghost" data-rp="raid-save-new" ${logged ? "" : "disabled"}>${t("새로 만들기", "New raid")}</button>
+        <button type="button" class="ghost" data-rp="raid-duplicate" ${logged ? "" : "disabled"}>${t("복제", "Duplicate")}</button>
+        <button type="button" class="ghost" data-rp="raid-rename" ${logged && activeRaidId ? "" : "disabled"}>${t("이름 편집", "Rename")}</button>
         <button type="button" class="danger" data-rp="raid-delete" ${logged && activeRaidId ? "" : "disabled"}>${t("삭제", "Delete")}</button>
       </div>
       <div class="rp-raid-lib-note">${loginBit}</div>
@@ -2002,13 +2362,18 @@
     const shareId = String(opts?.shareId || "").trim();
     if (!bound) {
       bound = true;
-      if (!shareId) loadState();
+      wipeLegacyPlannerCache();
       if (!boardBossId) syncBossBoard();
       if (!shareId) requestFitZoom();
       bindRoot();
-      refreshSavedRaids().then(() => {
-        if (rosterOpen && !shareReadonly) renderCd();
-      });
+      if (!shareId) {
+        applyAuthWorkspace().then(() => {
+          if (shareReadonly) return;
+          requestFitZoom();
+          const view = document.getElementById("plannerView");
+          if (view && !view.classList.contains("hidden")) render(true);
+        });
+      }
     }
     if (shareId) {
       if (activeShareId !== shareId) {
@@ -2022,9 +2387,12 @@
       shareReadonly = false;
       shareInfo = null;
       shareModal = null;
-      loadState();
-      if (!boardBossId) syncBossBoard();
-      requestFitZoom();
+      workspaceOwnerId = null;
+      applyAuthWorkspace().then(() => {
+        if (!boardBossId) syncBossBoard();
+        requestFitZoom();
+        render(true);
+      });
     }
     ensureShell(true);
     render(true);
@@ -2095,7 +2463,7 @@
     document.addEventListener("pointercancel", onPhaseDragUp);
     document.addEventListener("keydown", onKey);
     const onAuth = () => {
-      refreshSavedRaids().then(() => {
+      applyAuthWorkspace().then(() => {
         const view = document.getElementById("plannerView");
         if (view && !view.classList.contains("hidden")) render(true);
       });
@@ -2169,54 +2537,90 @@
     else renderCd();
   }
 
+  function applyAssignTime(assign, nextT) {
+    const t = Math.round(Math.max(0, Math.min(duration, nextT)));
+    assign.t = t;
+    assign.ph = phaseSegmentFor(bossId, t);
+    return t;
+  }
+
   function onFinePointerDown(e) {
     if (e.button !== 0) return;
+    const root = document.getElementById("plannerView");
+    if (!root) return;
     const chip = e.target.closest("[data-rp='assign'][data-fine='1']");
-    if (!chip || !document.getElementById("plannerView")?.contains(chip)) return;
-    const cell = chip.closest(".rp-cell.filled");
-    if (!cell) return;
+    if (chip && root.contains(chip)) {
+      const cell = chip.closest(".rp-cell.filled");
+      if (!cell) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const assign = assignments.find((a) => a.id === chip.dataset.id);
+      if (!assign) return;
+      selectedAssignId = assign.id;
+      fineDrag = {
+        mode: "cell",
+        id: assign.id,
+        anchor: Number(cell.dataset.anchor) || 0,
+        cell,
+        chip,
+        moved: false,
+        startX: e.clientX,
+      };
+      chip.classList.add("dragging");
+      chip.setPointerCapture?.(e.pointerId);
+      return;
+    }
+    const mark = e.target.closest(".rp-tl-mark:not(.ghost)");
+    if (!mark || !root.contains(mark)) return;
+    const id = mark.querySelector("[data-rp='assign']")?.dataset.id;
+    const assign = assignments.find((a) => a.id === id);
+    const lane = mark.closest(".rp-track-lane");
+    if (!assign || !lane) return;
     e.preventDefault();
     e.stopPropagation();
-    const assign = assignments.find((a) => a.id === chip.dataset.id);
-    if (!assign) return;
     selectedAssignId = assign.id;
     fineDrag = {
+      mode: "timeline",
       id: assign.id,
-      anchor: Number(cell.dataset.anchor) || 0,
-      cell,
-      chip,
+      mark,
+      lane,
       moved: false,
       startX: e.clientX,
     };
-    chip.classList.add("dragging");
-    chip.setPointerCapture?.(e.pointerId);
+    mark.classList.add("dragging");
+    document.body.classList.add("rp-tl-dragging");
+    mark.setPointerCapture?.(e.pointerId);
   }
 
   function onFinePointerMove(e) {
     if (!fineDrag) return;
-    const { cell, chip, anchor, id } = fineDrag;
+    if (Math.abs(e.clientX - fineDrag.startX) > 3) fineDrag.moved = true;
+    const assign = assignments.find((a) => a.id === fineDrag.id);
+    if (!assign) return;
+
+    if (fineDrag.mode === "timeline") {
+      const { lane, mark } = fineDrag;
+      const rect = lane.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const nextT = applyAssignTime(
+        assign,
+        (e.clientX - rect.left - timelinePad()) / zoom
+      );
+      mark.style.left = `${timeX(nextT)}px`;
+      const timeEl = mark.querySelector(".rp-tl-time");
+      if (timeEl) timeEl.textContent = fmtTime(nextT);
+      mark.title = `${phaseRelLabel(nextT, assign.ph)} (${fmtTime(nextT)})`;
+      return;
+    }
+
+    const { cell, chip, anchor } = fineDrag;
     const rect = cell.getBoundingClientRect();
     if (rect.width <= 0) return;
     const chipW = chip.offsetWidth || 26;
     const usable = Math.max(1, rect.width - chipW);
-    // 아이콘 왼쪽 끝 기준: 왼쪽에 붙이면 0, 오른쪽에 붙이면 1
     const leftPx = Math.max(0, Math.min(usable, e.clientX - rect.left - chipW / 2));
-    const ratio = leftPx / usable;
     const { lo, span } = fineRange(anchor);
-    const desiredT = Math.round(lo + ratio * span);
-    if (Math.abs(e.clientX - fineDrag.startX) > 3) fineDrag.moved = true;
-    const assign = assignments.find((a) => a.id === id);
-    if (!assign) return;
-    const sp = spellById(assign.spellId);
-    // 빠르게 쿨 구간을 건너뛰어도 경계(예: 55초)로 스냅 — 중간에 멈추지 않음
-    const nextT = clampFineTimeToAllowed(sp, assign.playerId, anchor, desiredT, assign.id);
-    if (nextT == null) {
-      cell.classList.add("fine-bad");
-      return;
-    }
-    cell.classList.remove("fine-bad");
-    assign.t = nextT;
-    assign.ph = phaseSegmentFor(bossId, nextT);
+    const nextT = applyAssignTime(assign, lo + (leftPx / usable) * span);
     const t = fineChipTimeRatio(assign, anchor);
     chip.style.setProperty("--fine-t", String(t));
     chip.style.left = `calc(var(--fine-t) * (100% - var(--fine-chip)))`;
@@ -2227,19 +2631,16 @@
 
   function onFinePointerUp() {
     if (!fineDrag) return;
-    const { chip, id, moved, cell } = fineDrag;
+    const { chip, mark, id, moved, cell } = fineDrag;
     chip?.classList.remove("dragging");
+    mark?.classList.remove("dragging");
     cell?.classList.remove("fine-bad");
+    document.body.classList.remove("rp-tl-dragging");
     fineDrag = null;
-    if (moved) {
-      suppressAssignClickUntil = Date.now() + 350;
-      renderCd();
-      saveState();
-    } else {
-      selectedAssignId = id;
-      renderCd();
-      saveState();
-    }
+    if (moved) suppressAssignClickUntil = Date.now() + 350;
+    selectedAssignId = id;
+    renderCd();
+    saveState();
   }
 
   function laneHoverTip() {
@@ -2423,10 +2824,9 @@
       return;
     }
     if (act === "import-helper") {
+      if (!rosterOpen) openRosterModal();
       if (!importHelperRoster()) {
         window.alert(t("구인 도우미에 전문화가 없습니다. 먼저 공대를 짜거나 데모 로스터를 쓰세요.", "Helper roster is empty. Build one first, or use the demo roster."));
-      } else {
-        rosterOpen = true;
       }
       render(true);
       saveState();
@@ -2438,34 +2838,32 @@
       saveState();
       return;
     }
+    if (act === "roster-cap") {
+      setRosterCap(activeCap() + (Number(btn.dataset.delta) || 0));
+      render(true);
+      return;
+    }
     if (act === "raid-login") {
       global.RaidAuth?.previewLogin?.();
       return;
     }
     if (act === "raid-save") {
-      if (!global.RaidStore?.isLoggedIn()) {
-        window.alert(t("로그인하면 내 공대를 저장할 수 있습니다.", "Log in to save your raids."));
-        return;
-      }
-      if (!activeRaidId) {
-        const fallback = t(`내 공대 ${savedRaids.length + 1}`, `Raid ${savedRaids.length + 1}`);
-        const name = window.prompt(t("공대 이름", "Raid name"), fallback);
-        if (!name) return;
-        persistActiveRaid({ asNew: true, name: name.trim().slice(0, 80) }).then(() => renderCd());
-        return;
-      }
-      persistActiveRaid().then(() => renderCd());
+      saveActiveRoster().then(() => {
+        renderCd();
+        saveState();
+      });
       return;
     }
     if (act === "raid-save-new") {
-      if (!global.RaidStore?.isLoggedIn()) {
-        window.alert(t("로그인하면 내 공대를 저장할 수 있습니다.", "Log in to save your raids."));
-        return;
-      }
-      const fallback = t(`내 공대 ${savedRaids.length + 1}`, `Raid ${savedRaids.length + 1}`);
-      const name = window.prompt(t("공대 이름", "Raid name"), fallback);
-      if (!name) return;
-      persistActiveRaid({ asNew: true, name: name.trim().slice(0, 80) }).then(() => renderCd());
+      createBlankRaid();
+      return;
+    }
+    if (act === "raid-duplicate") {
+      duplicateRaid();
+      return;
+    }
+    if (act === "raid-rename") {
+      renameActiveRaid();
       return;
     }
     if (act === "raid-delete") {
@@ -2543,18 +2941,40 @@
       saveState();
       return;
     }
-    if (act === "toggle-roster") {
-      rosterOpen = !rosterOpen;
-      if (!rosterOpen) rosterEditId = null;
-      if (rosterOpen) {
-        refreshSavedRaids().then(() => {
-          renderCd();
-          saveState();
-        });
-        return;
-      }
+    if (act === "roster-close-save") {
+      rosterClosePrompt = false;
+      saveActiveRoster().then(() => {
+        finishCloseRosterModal();
+        renderCd();
+        saveState();
+      });
+      return;
+    }
+    if (act === "roster-close-discard") {
+      rosterClosePrompt = false;
+      discardRosterEdit();
+      finishCloseRosterModal();
       renderCd();
       saveState();
+      return;
+    }
+    if (act === "roster-close-cancel" || act === "roster-close-backdrop") {
+      if (act === "roster-close-backdrop" && e.target.dataset.rp !== "roster-close-backdrop") return;
+      rosterClosePrompt = false;
+      renderCd();
+      return;
+    }
+    if (act === "toggle-roster") {
+      if (rosterOpen) {
+        requestCloseRoster();
+        return;
+      }
+      openRosterModal();
+      renderCd();
+      refreshSavedRaids().then(() => {
+        renderCd();
+        saveState();
+      });
       return;
     }
     if (act === "add-spec") {
@@ -2585,11 +3005,7 @@
       return;
     }
     if (act === "roster-backdrop") {
-      if (e.target.dataset.rp === "roster-backdrop") {
-        rosterOpen = false;
-        renderCd();
-        saveState();
-      }
+      if (e.target.dataset.rp === "roster-backdrop") requestCloseRoster();
       return;
     }
     if (act === "roster-trash") return;
@@ -2676,7 +3092,7 @@
       return;
     }
     if (act === "assign-cell") {
-      if (btn.classList.contains("blocked") || btn.classList.contains("filled")) return;
+      if (btn.classList.contains("filled")) return;
       let placeT = btn.dataset.placeT != null && btn.dataset.placeT !== "" ? +btn.dataset.placeT : +btn.dataset.t;
       if (btn.classList.contains("partial") && btn.dataset.anchor != null) {
         const rect = btn.getBoundingClientRect();
@@ -2684,16 +3100,14 @@
           const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
           const { lo, span } = fineRange(+btn.dataset.anchor);
           const clickT = Math.round(lo + ratio * span);
-          const ready = +btn.dataset.placeT;
-          if (clickT < ready) return;
-          placeT = Math.max(ready, Math.min(lo + span, clickT));
+          placeT = Math.max(lo, Math.min(lo + span, clickT));
         }
       }
       placeAt(placeT, btn.dataset.event || null, btn.dataset.spell || null, btn.dataset.player || null);
       return;
     }
     if (act === "lane") {
-      if (btn.classList.contains("blocked")) return;
+      if (Date.now() < suppressAssignClickUntil) return;
       const rect = btn.getBoundingClientRect();
       const time = Math.max(0, Math.min(duration, (e.clientX - rect.left - timelinePad()) / zoom));
       placeAt(time, null, btn.dataset.spell || null, btn.dataset.player || null);
@@ -2852,10 +3266,18 @@
       loadSavedRaid(id);
       return;
     }
+    if (e.target.dataset.rp === "roster-cap-input") {
+      setRosterCap(e.target.value);
+      render(true);
+      return;
+    }
     if (e.target.dataset.rp === "server") {
       const member = findRosterMember(e.target.dataset.id);
-      if (member) member.server = normalizeRealm(e.target.value);
-      saveState();
+      if (member) {
+        member.server = normalizeRealm(e.target.value);
+        if (rosterOpen) rosterDirty = true;
+      }
+      if (!rosterOpen) saveState();
     }
   }
 
@@ -2875,18 +3297,23 @@
     }
     if (e.target.dataset.rp === "nick") {
       const member = findRosterMember(e.target.dataset.id);
-      if (member) member.nick = e.target.value;
+      if (member) {
+        member.nick = e.target.value;
+        if (rosterOpen) rosterDirty = true;
+      }
       const call = playerCallsign(member);
       e.target.title = call;
-      document.querySelectorAll(`tr[data-player="${e.target.dataset.id}"] .rp-who`).forEach((who) => {
-        who.textContent = call;
-      });
-      document.querySelectorAll(`.rp-track-lane[data-player="${e.target.dataset.id}"]`).forEach((lane) => {
-        const who = lane.closest(".rp-track")?.querySelector(".rp-who");
-        if (who) who.textContent = call;
-      });
-      refreshAssignLabels();
-      saveState();
+      if (!rosterOpen) {
+        document.querySelectorAll(`tr[data-player="${e.target.dataset.id}"] .rp-who`).forEach((who) => {
+          who.textContent = call;
+        });
+        document.querySelectorAll(`.rp-track-lane[data-player="${e.target.dataset.id}"]`).forEach((lane) => {
+          const who = lane.closest(".rp-track")?.querySelector(".rp-who");
+          if (who) who.textContent = call;
+        });
+        refreshAssignLabels();
+        saveState();
+      }
     }
   }
 
@@ -2909,6 +3336,7 @@
     if (member) {
       member.nick = nickEl ? nickEl.value : member.nick;
       member.server = normalizeRealm(serverEl?.value || member.server);
+      if (rosterOpen) rosterDirty = true;
     }
     rosterEditId = null;
     renderCd();
@@ -2962,10 +3390,13 @@
     if (tool === "cd") {
       if (e.key === "Escape") {
         if (rosterOpen) {
-          rosterOpen = false;
-          rosterEditId = null;
-          renderCd();
-          saveState();
+          e.preventDefault();
+          if (rosterClosePrompt) {
+            rosterClosePrompt = false;
+            renderCd();
+            return;
+          }
+          requestCloseRoster();
           return;
         }
         selectedSpellId = null;
@@ -2980,6 +3411,15 @@
         saveState();
       }
       return;
+    }
+
+    if (e.key === "Enter") {
+      const textObj = selectedSingleText();
+      if (textObj) {
+        e.preventDefault();
+        beginTextEditor(textObj, { focus: true, selectAll: true });
+        return;
+      }
     }
 
     if (e.ctrlKey && e.key.toLowerCase() === "z") {
@@ -3166,11 +3606,6 @@
     const list = paletteStampList();
     if (!list.length) return;
     const idx = list.findIndex((s) => stamp && s.kind === stamp.kind && s.id === stamp.id);
-    // 배치 직후(선택 모드)에는 Z/X가 같은 토큰으로 복귀만 한다
-    if (boardTool !== "token" && idx >= 0) {
-      selectPaletteStamp(stamp.kind, stamp.id);
-      return;
-    }
     let next;
     if (idx < 0) {
       // 팔레트 미선택: Z → 마지막(이전), X → 첫 항목(다음)
@@ -3206,17 +3641,7 @@
       return;
     }
     const conflict = cooldownConflict(spell, player.playerId, time);
-    if (conflict) {
-      window.alert(
-        conflict.type === "used"
-          ? t("이미 이 타이밍에 배치되어 있습니다.", "Already placed at this time.")
-          : t(
-              `쿨타임 중이라 넣을 수 없습니다. ${fmtTime(conflict.assign.t)}에 사용 · ${fmtTime(conflict.readyAt)} 이후 가능.`,
-              `On cooldown. Used at ${fmtTime(conflict.assign.t)} · ready after ${fmtTime(conflict.readyAt)}.`
-            )
-      );
-      return;
-    }
+    if (conflict?.type === "used") return;
     assignments.push({
       id: uid("as"),
       spellId: spell.id,
@@ -3498,8 +3923,9 @@
       })
       .join("");
 
-    const benchSlots = localBench.length
-      ? localBench.map((m) => renderRosterSlot(m, "bench")).join("")
+    const bench = rosterOpen ? editBench : localBench;
+    const benchSlots = bench.length
+      ? bench.map((m) => renderRosterSlot(m, "bench")).join("")
       : `<div class="empty">${t("미참 없음", "None")}</div>`;
 
     const pop = `<div class="rp-roster-pop" data-rp="roster-backdrop">
@@ -3514,8 +3940,12 @@
             </div>
           </div>
           ${renderRaidLibrary()}
+          <p class="rp-roster-draft-note${rosterDirty ? " dirty" : ""}">${t(
+            "구성원을 넣고 빼도 저장을 눌러야 타임라인에 반영됩니다.",
+            "Add or remove members, then press Save to apply them to the timeline."
+          )}${rosterDirty ? ` · ${t("저장되지 않음", "Unsaved")}` : ""}</p>
           <div class="headcount rp-roster-hc">
-            <div class="headcount-main">${t("선발", "Active")} <em>${roster.length}</em> / 20 · ${t("미참", "Sit-out")} <em>${localBench.length}</em></div>
+            <div class="headcount-main">${t("선발", "Active")} <em>${roster.length}</em> / <span class="rp-cap"><button type="button" class="ghost" data-rp="roster-cap" data-delta="-1" aria-label="${t("인원 줄이기", "Fewer players")}">−</button><input type="number" min="${ROSTER_CAP_MIN}" max="${ROSTER_CAP_MAX}" step="1" value="${activeCap()}" data-rp="roster-cap-input" aria-label="${t("선발 인원", "Roster size")}"><button type="button" class="ghost" data-rp="roster-cap" data-delta="1" aria-label="${t("인원 늘리기", "More players")}">+</button></span> · ${t("미참", "Sit-out")} <em>${bench.length}</em></div>
             <div class="headcount-roles">${roleLabel("Tank")} ${counts.Tank}/2 · ${roleLabel("Heal")} ${counts.Heal}/4~5 · DPS ${dpsN}</div>
           </div>
           <div class="rp-roster-acts">
@@ -3525,7 +3955,7 @@
           <div class="rp-roster-columns">${columns}</div>
           <div class="rp-roster-bottom">
             <div class="rp-roster-bench" data-drop="bench">
-              <div class="rp-roster-zone-h">${t("미참인원", "Sit-out")} <em>${localBench.length}</em></div>
+              <div class="rp-roster-zone-h">${t("미참인원", "Sit-out")} <em>${bench.length}</em></div>
               <div class="rp-roster-bench-grid">${benchSlots}</div>
             </div>
             <div class="rp-roster-trash" data-drop="trash" data-rp="roster-trash">
@@ -3536,6 +3966,20 @@
         ${renderSpecAddPanel()}
         ${renderMemberEditDialog()}
       </div>
+      ${
+        rosterClosePrompt
+          ? `<div class="rp-roster-close-pop" data-rp="roster-close-backdrop">
+        <div class="rp-roster-close-ask" role="alertdialog" aria-modal="true" aria-label="${t("저장하지 않은 공대 구성", "Unsaved roster")}">
+          <p>${t("저장하지 않은 공대 구성이 있습니다.", "This roster has unsaved changes.")}</p>
+          <div class="rp-roster-close-acts">
+            <button type="button" class="primary" data-rp="roster-close-save">${t("저장하고 닫기", "Save and close")}</button>
+            <button type="button" class="danger" data-rp="roster-close-discard">${t("저장하지 않고 닫기", "Close without saving")}</button>
+            <button type="button" class="ghost" data-rp="roster-close-cancel">${t("계속 편집", "Keep editing")}</button>
+          </div>
+        </div>
+      </div>`
+          : ""
+      }
     </div>`;
 
     return pop;
@@ -4296,7 +4740,7 @@
 
     box.innerHTML = `
       <div class="rp-cd roster-collapsed">
-        ${renderRosterSide(roster)}
+        ${renderRosterSide(rosterOpen ? editRoster : roster)}
         <section class="panel rp-main">
           <div class="rp-main-head">
             ${renderPlanSlot()}
@@ -4304,12 +4748,6 @@
               <button class="ghost" data-rp="toggle-roster">${t("공대 구성", "Roster")} (${roster.length}${
                 activeRaidName() ? ` · ${escapeAttr(activeRaidName())}` : ""
               })</button>
-              <div class="rp-zoom-acts">
-                <button class="ghost" data-rp="zoom-out" title="${t("축소", "Zoom out")}">−</button>
-                <span class="rp-zoom-label">${zoom}px/s</span>
-                <button class="ghost" data-rp="zoom-in" title="${t("확대", "Zoom in")}">+</button>
-                <button class="ghost" data-rp="zoom-fit">${t("맞춤", "Fit")}</button>
-              </div>
               ${(() => {
                 const n = countCooldownOverlaps();
                 return n
@@ -4329,6 +4767,14 @@
 
           ${renderWclPanel()}
           ${renderPhaseBar()}
+          <div class="rp-zoom-row">
+            <div class="rp-zoom-acts">
+              <button class="ghost" data-rp="zoom-out" title="${t("축소", "Zoom out")}">−</button>
+              <span class="rp-zoom-label">${zoom}px/s</span>
+              <button class="ghost" data-rp="zoom-in" title="${t("확대", "Zoom in")}">+</button>
+              <button class="ghost" data-rp="zoom-fit">${t("맞춤", "Fit")}</button>
+            </div>
+          </div>
           <div class="rp-board-wrap">${renderTimeline(events)}</div>
         </section>
       </div>
@@ -4580,7 +5026,7 @@
         if (next.kind !== "blocked") break;
         j += 1;
       }
-      out.push(renderCdBandCell(avail.conflict, j - i, events[i], events[j - 1]));
+      out.push(renderCdBandCell(avail.conflict, j - i, events[i], events[j - 1], sp, player));
       i = j;
     }
     return out.join("");
@@ -4876,7 +5322,7 @@
                             const clash = overlap.ids.has(a.id);
                             return `<div class="rp-tl-mark ${selectedAssignId === a.id ? "on" : ""} ${clash ? "clash" : ""}" style="left:${timeX(
                               a.t
-                            )}px;--class:${markAccent}" title="${escapeAttr(
+                            )}px;--class:${markAccent}" data-tl-drag="1" title="${escapeAttr(
                               `${phaseRelLabel(a.t, a.ph)} (${fmtTime(a.t)})${
                                 clash ? ` · ${t("쿨이 겹쳐서 이 타이밍엔 쓸 수 없습니다", "On cooldown here — cannot be used")}` : ""
                               }`
@@ -5022,6 +5468,25 @@
     top.scrollLeft = bottom.scrollLeft;
   }
 
+  function mapCreditHtml() {
+    return t(
+      `맵 그림은 <a href="https://raidplan.io" target="_blank" rel="noopener noreferrer">raidplan.io</a>에서 허가를 받아 사용했습니다.`,
+      `Arena maps used with permission from <a href="https://raidplan.io" target="_blank" rel="noopener noreferrer">raidplan.io</a>.`
+    );
+  }
+
+  function ensureMapCredit() {
+    const panel = document.querySelector("#rpBoard .rp-canvas-panel");
+    if (!panel) return;
+    let el = panel.querySelector(".rp-map-credit");
+    if (!el) {
+      el = document.createElement("p");
+      el.className = "rp-map-credit";
+      panel.appendChild(el);
+    }
+    el.innerHTML = mapCreditHtml();
+  }
+
   function renderBoard(force) {
     const box = document.getElementById("rpBoard");
     if (!box) return;
@@ -5054,6 +5519,7 @@
             <div class="rp-canvas-wrap" id="rpCanvasWrap">
               <canvas id="rpCanvas"></canvas>
             </div>
+            <p class="rp-map-credit">${mapCreditHtml()}</p>
           </section>
           <aside class="panel rp-side rp-board-meta">
             <div class="rp-side-head">
@@ -5081,6 +5547,7 @@
   }
 
   function renderBoardChrome() {
+    ensureMapCredit();
     const grid = document.getElementById("rpToolGrid");
     if (!grid) return;
     const tools = [
@@ -5307,6 +5774,7 @@
     if (!canvas || canvas.dataset.bound) return;
     canvas.dataset.bound = "1";
     canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("dblclick", onCanvasDblClick);
     canvas.addEventListener("pointermove", onPointerMove);
     canvas.addEventListener("pointerup", onPointerUp);
     canvas.addEventListener("pointerleave", onPointerUp);
@@ -5810,8 +6278,27 @@
       };
     }
     if (o.type === "text") {
-      const s = (o.scale || 16) * 1.6;
-      return { x0: o.x - s, y0: o.y - s * 0.8, x1: o.x + s, y1: o.y + s * 0.5 };
+      const { w, h } = textMetrics(o);
+      const rot = o.rot || 0;
+      const cos = Math.cos(rot);
+      const sin = Math.sin(rot);
+      const hw = w / 2 + 4;
+      const hh = h / 2 + 4;
+      const corners = [
+        [-hw, -hh],
+        [hw, -hh],
+        [hw, hh],
+        [-hw, hh],
+      ].map(([lx, ly]) => ({
+        x: o.x + lx * cos - ly * sin,
+        y: o.y + lx * sin + ly * cos,
+      }));
+      return {
+        x0: Math.min(...corners.map((p) => p.x)),
+        y0: Math.min(...corners.map((p) => p.y)),
+        x1: Math.max(...corners.map((p) => p.x)),
+        y1: Math.max(...corners.map((p) => p.y)),
+      };
     }
     if (o.type === "arrow" || o.type === "line") {
       return {
@@ -5932,14 +6419,20 @@
       return;
     }
     if (boardTool === "text") {
-      const label = window.prompt(t("문구", "Text"), "");
-      if (!label) return;
+      const hit = hitTest(p.x, p.y);
+      if (hit?.type === "text") {
+        selectedObjIds = new Set([hit.id]);
+        setBoardTool("select");
+        beginTextEditor(hit, { focus: true, selectAll: true });
+        drawBoard();
+        return;
+      }
       pushUndo();
-      const obj = { id: uid("obj"), type: "text", x: p.x, y: p.y, color: boardColor, label, scale: 16, rot: 0 };
+      const obj = { id: uid("obj"), type: "text", x: p.x, y: p.y, color: boardColor, label: "", scale: 16, rot: 0 };
       currentStep().objects.push(obj);
       selectAfterCreate(obj);
+      beginTextEditor(obj, { focus: true, fresh: true });
       drawBoard();
-      saveState();
       return;
     }
     pushUndo();
@@ -6123,6 +6616,7 @@
 
   function undo() {
     if (!undoStack.length) return;
+    dropTextEditor();
     redoStack.push(cloneStep());
     currentStep().objects = undoStack.pop();
     drawBoard();
@@ -6131,6 +6625,7 @@
 
   function redo() {
     if (!redoStack.length) return;
+    dropTextEditor();
     undoStack.push(cloneStep());
     currentStep().objects = redoStack.pop();
     drawBoard();
@@ -6164,7 +6659,7 @@
           if (Math.abs(lx) <= hw && Math.abs(ly) <= hh) return o;
         }
       } else if (o.type === "text") {
-        if (Math.hypot(x - o.x, y - o.y) < (o.scale || 16) * 1.4) return o;
+        if (hitText(o, x, y)) return o;
       } else if (o.type === "arrow" || o.type === "line") {
         if (distToSeg(x, y, o.x1, o.y1, o.x2, o.y2) < 8) return o;
       } else if (o.type === "pen" && o.points?.length) {
@@ -6208,9 +6703,237 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  function drawBoard() {
+  function textMetrics(o) {
+    const sc = Math.max(12, Number(o?.scale) || 16);
+    const label = String(o?.label || "");
+    let width = Math.max(sc, label.length * sc * 0.6);
+    const ctx = document.getElementById("rpCanvas")?.getContext("2d");
+    if (ctx) {
+      ctx.save();
+      ctx.font = `700 ${sc}px sans-serif`;
+      if (label) width = Math.max(sc, ctx.measureText(label).width);
+      ctx.restore();
+    }
+    return { w: width, h: sc * 1.25 };
+  }
+
+  function hitText(o, x, y) {
+    const { w, h } = textMetrics(o);
+    const dx = x - o.x;
+    const dy = y - o.y;
+    const rot = -(o.rot || 0);
+    const cos = Math.cos(rot);
+    const sin = Math.sin(rot);
+    const lx = dx * cos - dy * sin;
+    const ly = dx * sin + dy * cos;
+    return Math.abs(lx) <= w / 2 + 8 && Math.abs(ly) <= h / 2 + 8;
+  }
+
+  function selectedSingleText() {
+    if (selectedObjIds.size !== 1) return null;
+    const id = selectedObjIds.values().next().value;
+    const o = (currentStep()?.objects || []).find((x) => x.id === id);
+    return o?.type === "text" ? o : null;
+  }
+
+  function textEditorInput() {
+    return document.querySelector("#rpCanvasWrap .rp-text-edit");
+  }
+
+  function placeTextEditor(o, input) {
     const canvas = document.getElementById("rpCanvas");
-    if (!canvas) return;
+    const wrap = document.getElementById("rpCanvasWrap");
+    if (!canvas || !wrap || !input || !o) return;
+    const metrics = textMetrics(o);
+    const canvasRect = canvas.getBoundingClientRect();
+    const wrapRect = wrap.getBoundingClientRect();
+    const cx = canvasRect.left - wrapRect.left + o.x * scale;
+    const cy = canvasRect.top - wrapRect.top + o.y * scale;
+    const half = (metrics.h * scale) / 2;
+    const inputH = 32;
+    let top = cy + half + 6;
+    if (top + inputH > wrapRect.height - 4) top = Math.max(4, cy - half - inputH - 6);
+    input.style.left = `${cx}px`;
+    input.style.top = `${top}px`;
+    input.style.width = `${Math.min(360, Math.max(140, metrics.w * scale + 28))}px`;
+  }
+
+  function dropTextEditor() {
+    textEditor = null;
+    textEditorInput()?.remove();
+  }
+
+  function finishTextEditor() {
+    if (!textEditor || textEditor.closing) return;
+    const ed = textEditor;
+    ed.closing = true;
+    textEditor = null;
+    const input = textEditorInput();
+    const label = String(input?.value || "").trim();
+    input?.remove();
+    const step = currentStep();
+    const o = step?.objects?.find((x) => x.id === ed.id);
+    let changed = false;
+    if (o) {
+      if (!label) {
+        if (ed.fresh) {
+          step.objects = step.objects.filter((x) => x.id !== ed.id);
+          selectedObjIds.delete(ed.id);
+          const now = JSON.stringify(step.objects);
+          const top = undoStack[undoStack.length - 1];
+          if (top && JSON.stringify(top) === now) undoStack.pop();
+          changed = true;
+        } else if ((o.label || "") !== ed.original) {
+          o.label = ed.original;
+          changed = true;
+        }
+      } else if (label !== ed.original) {
+        o.label = label;
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveState();
+      textEditorRepaint = true;
+    }
+    if (!boardPainting) drawBoard();
+  }
+
+  function onTextEditorInput(e) {
+    if (!textEditor) return;
+    const o = (currentStep()?.objects || []).find((x) => x.id === textEditor.id);
+    if (!o) return;
+    const next = e.target.value;
+    if (!textEditor.fresh && !textEditor.undoPushed && next !== (o.label || "")) {
+      pushUndo();
+      textEditor.undoPushed = true;
+    }
+    o.label = next;
+    saveState();
+    drawBoard();
+  }
+
+  function onTextEditorKey(e) {
+    e.stopPropagation();
+    if (e.key === "Enter") {
+      e.preventDefault();
+      e.target.blur();
+      return;
+    }
+    if (e.key !== "Escape" || !textEditor) return;
+    e.preventDefault();
+    const ed = textEditor;
+    if (ed.undoPushed && undoStack.length) {
+      undoStack.pop();
+      ed.undoPushed = false;
+    }
+    const o = (currentStep()?.objects || []).find((x) => x.id === ed.id);
+    if (o) o.label = ed.original;
+    e.target.value = ed.fresh ? "" : ed.original;
+    e.target.blur();
+  }
+
+  function beginTextEditor(o, opts = {}) {
+    if (!o || o.type !== "text" || shareReadonly) return;
+    const wrap = document.getElementById("rpCanvasWrap");
+    if (!wrap) return;
+    const focusEditor = () => {
+      const input = textEditorInput();
+      if (!input) return;
+      placeTextEditor(o, input);
+      if (!opts.focus) return;
+      input.focus();
+      if (opts.selectAll) input.select();
+    };
+    if (textEditor?.id === o.id && !textEditor.closing) {
+      if (opts.fresh) textEditor.fresh = true;
+      focusEditor();
+      return;
+    }
+    if (textEditor) finishTextEditor();
+    if (textEditor?.id === o.id && !textEditor.closing) {
+      if (opts.fresh) textEditor.fresh = true;
+      focusEditor();
+      return;
+    }
+    if (textEditor) dropTextEditor();
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "rp-text-edit";
+    input.value = o.label || "";
+    input.placeholder = t("글 수정", "Edit text");
+    input.setAttribute("aria-label", t("문구", "Text"));
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    textEditor = {
+      id: o.id,
+      fresh: !!opts.fresh,
+      original: o.label || "",
+      undoPushed: false,
+      closing: false,
+    };
+    input.addEventListener("pointerdown", (e) => e.stopPropagation());
+    input.addEventListener("input", onTextEditorInput);
+    input.addEventListener("keydown", onTextEditorKey);
+    input.addEventListener("blur", () => finishTextEditor());
+    wrap.appendChild(input);
+    placeTextEditor(o, input);
+    if (opts.focus) {
+      input.focus();
+      if (opts.selectAll) input.select();
+    }
+  }
+
+  function syncTextEditor() {
+    if (shareReadonly || tool !== "board") {
+      finishTextEditor();
+      return;
+    }
+    const o = selectedSingleText();
+    if (!o) {
+      finishTextEditor();
+      return;
+    }
+    if (textEditor?.id === o.id && !textEditor.closing) {
+      const input = textEditorInput();
+      if (input) placeTextEditor(o, input);
+      else beginTextEditor(o);
+      return;
+    }
+    beginTextEditor(o);
+  }
+
+  function onCanvasDblClick(e) {
+    if (shareReadonly || e.button !== 0) return;
+    const p = canvasPoint(e);
+    const hit = hitTest(p.x, p.y);
+    if (!hit || hit.type !== "text") return;
+    e.preventDefault();
+    if (boardTool !== "select") setBoardTool("select");
+    selectedObjIds = new Set([hit.id]);
+    handlePreviewId = null;
+    beginTextEditor(hit, { focus: true, selectAll: true });
+    drawBoard();
+  }
+
+  function drawBoard() {
+    if (!paintBoard()) return;
+    if (boardPainting) return;
+    boardPainting = true;
+    try {
+      syncTextEditor();
+      if (textEditorRepaint) {
+        textEditorRepaint = false;
+        paintBoard();
+      }
+    } finally {
+      boardPainting = false;
+    }
+  }
+
+  function paintBoard() {
+    const canvas = document.getElementById("rpCanvas");
+    if (!canvas) return false;
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
@@ -6237,6 +6960,7 @@
       ctx.restore();
     }
     ctx.restore();
+    return true;
   }
 
   function drawArena(ctx) {
@@ -6453,11 +7177,25 @@
   }
 
   function importFromHelper() {
+    openRosterModal();
     const ok = importHelperRoster();
-    if (!ok) return false;
-    rosterOpen = true;
+    if (!ok) {
+      discardRosterEdit();
+      rosterOpen = false;
+      return false;
+    }
     render(true);
     saveState();
+    return true;
+  }
+
+  function handleBack() {
+    if (shareReadonly) return false;
+    if (tool !== "board") return false;
+    tool = "cd";
+    requestFitZoom();
+    render(true);
+    document.getElementById("plannerView")?.scrollIntoView({ block: "start" });
     return true;
   }
 
@@ -6465,5 +7203,6 @@
     mount,
     render,
     importFromHelper,
+    handleBack,
   };
 })(window);

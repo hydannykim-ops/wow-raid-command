@@ -355,12 +355,9 @@
             <button class="ghost" data-g-act="pause-sim" id="gBtnPause">${t("일시정지", "Pause")}</button>
             <label class="g-speed">${t("배속", "Speed")}
               <select id="gCombatSpeed">
-                <option value="1">1x</option>
-                <option value="5">5x</option>
-                <option value="10" selected>10x</option>
-                <option value="25">25x</option>
-                <option value="50">50x</option>
-                <option value="100">100x</option>
+                ${(window.RAID_GAME_BALANCE?.sim?.speedOptions || [1, 2, 4, 8])
+                  .map((v) => `<option value="${v}">${v}x</option>`)
+                  .join("")}
               </select>
             </label>
             <button class="ghost" data-g-act="reset">${t("새 시즌", "New season")}</button>
@@ -515,34 +512,70 @@
             <div class="g-combat-meta" id="gCombatMeta"></div>
             <div class="g-tank-wipe" id="gTankWipe" hidden></div>
           </div>
-          <div class="g-raid-frames" id="gRaidFrames"></div>
-          <div class="g-inspect" id="gInspect" hidden></div>
-          <div class="g-meters">
-            <div class="g-meter-col">
-              <h3>DPS <span class="meter-hint">${t("(초당 · 누적)", "(rate · total)")}</span></h3>
-              <div id="gDpsMeter"></div>
+          <div class="g-arena-row">
+            <div class="g-arena-frames">
+              <div class="g-raid-frames compact" id="gRaidFrames"></div>
             </div>
-            <div class="g-meter-col">
-              <h3>HPS <span class="meter-hint">${t("(실힐 기준 · OH 참고)", "(by effective · OH ref)")}</span></h3>
-              <div id="gHpsMeter"></div>
+            <div class="g-arena-stage">
+              <div class="g-arena-wrap"><canvas id="gArenaCanvas"></canvas></div>
+              <div class="g-arena-legend">
+                <span><i class="lg-zone"></i>${t("예고 장판 — 터질 때 안에 있으면 2배 피격", "Telegraph — 2× damage if inside on detonation")}</span>
+                <span><i class="lg-tank"></i>${t("메인탱", "Main tank")}</span>
+                <span><b>?</b> ${t("멍때림·엉뚱한 방향", "Blunder")}</span>
+                <span>${t("토큰 클릭: 스펙 보기 · 수동 모드에선 해골 클릭 = 전투부활", "Click token: inspect · manual mode: click skull to brez")}</span>
+              </div>
+            </div>
+            <div class="g-arena-meters">
+              <div class="g-meter-col">
+                <h3>DPS <span class="meter-hint">${t("(초당 · 누적)", "(rate · total)")}</span></h3>
+                <div id="gDpsMeter"></div>
+              </div>
+              <div class="g-meter-col">
+                <h3>HPS <span class="meter-hint">${t("(실힐 · OH)", "(eff · OH)")}</span></h3>
+                <div id="gHpsMeter"></div>
+              </div>
             </div>
           </div>
-          <div class="g-log" id="gLog"></div>
+          <div class="g-inspect" id="gInspect" hidden></div>
+          <div class="g-arena-bottom">
+            <div>
+              <div class="g-wcl-kicker">Combat Log</div>
+              <div class="g-log" id="gLog"></div>
+            </div>
+            <div class="g-try-side">
+              <div class="g-race-head">
+                <div>
+                  <div class="g-wcl-kicker">Race Monitor</div>
+                  <h3>${t("공대 진행도", "Raid progress")}</h3>
+                </div>
+                <label class="g-brez-set">${t("전투부활", "Battle rez")}
+                  <select id="gBattleRezMode">
+                    <option value="manual">${t("수동", "Manual")}</option>
+                    <option value="auto_any">${t("자동 · 아무나", "Auto any")}</option>
+                    <option value="auto_tank_heal">${t("자동 · 탱/힐만", "Auto tank/heal only")}</option>
+                  </select>
+                </label>
+              </div>
+              <div id="gWclTableSide"></div>
+            </div>
+          </div>
         </section>
-        <aside class="panel g-try-side">
-          <div class="g-wcl-kicker">Race Monitor</div>
-          <h2>${t("공대 진행도", "Raid progress")}</h2>
-          <label class="g-brez-set">${t("전투부활", "Battle rez")}
-            <select id="gBattleRezMode">
-              <option value="manual">${t("수동", "Manual")}</option>
-              <option value="auto_any">${t("자동 · 아무나", "Auto any")}</option>
-              <option value="auto_tank_heal">${t("자동 · 탱/힐만", "Auto tank/heal only")}</option>
-            </select>
-          </label>
-          <div id="gWclTableSide"></div>
-        </aside>
       </div>
     `;
+  }
+
+  function attachArena() {
+    const cv = $("#gArenaCanvas");
+    if (!cv || !window.RaidGameArena) return;
+    window.RaidGameArena.attach(cv, {
+      getEngine: E,
+      lang: () => langRef(),
+      onPick: (id, dead) => {
+        const p = E()?.player;
+        const brez = dead && p?.state === "fighting" && p.battleRezMode === "manual" && (p.combat?.battleRezLeft || 0) > 0;
+        handleAction(brez ? "brez" : "inspect", id);
+      },
+    });
   }
 
   function patch(force) {
@@ -651,11 +684,18 @@
   }
 
   function skillTypeLabel(skill) {
+    const def = window.RAID_GAME_BALANCE?.arena?.skillDefaults?.[skill.type] || {};
+    const sp = { ...def, ...skill };
     const kind = math().skillKind(skill);
-    if (kind === "tankBuster") return t("탱버스터", "tank buster");
-    if (kind === "random") return t(`랜덤${skill.count ?? 3}`, `rand ${skill.count ?? 3}`);
-    if (skill.type === "aoe2") return t("광역2", "AoE 2");
-    return t("광역1", "AoE 1");
+    const shape = sp.shape || (kind === "tankBuster" ? "buster" : kind === "random" ? "circle" : "raid");
+    const fatal = sp.fatal ? t("·즉사", "·fatal") : "";
+    if (shape === "buster") return t("탱버스터·교대", "buster·swap");
+    if (shape === "raid") return t("전체 피해", "raid dmg");
+    if (shape === "circle" && sp.at === "target") return t(`발밑 장판×${sp.count ?? 3}`, `puddle×${sp.count ?? 3}`) + fatal;
+    if (shape === "circle") return t("보스 주변 폭발", "boss nova") + fatal;
+    if (shape === "cone") return t("부채꼴", "frontal") + fatal;
+    if (shape === "line") return t("직선", "beam") + fatal;
+    return t("광역", "AoE");
   }
 
   const BURST_ICON_CDN = "https://wow.zamimg.com/images/wow/icons/large/";
@@ -718,6 +758,8 @@
         return t("힐업 부족으로 말라죽음", "Died from insufficient healing");
       case "double":
         return t("2배 피격으로 사망", "Died from double hit");
+      case "zone":
+        return t("장판을 못 피해서 사망", "Died standing in a zone");
       default:
         return t("사망", "Death");
     }
@@ -1488,6 +1530,7 @@
     const c = p.combat;
     const fighting = p.state === "fighting" && c && !c.finished;
     syncBrezSelects(p.battleRezMode);
+    attachArena();
 
     const kicker = $("#gTryKicker");
     if (kicker) kicker.textContent = `${t("트라이", "Try")} #${p.tries || 0}`;

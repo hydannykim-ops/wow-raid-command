@@ -1,6 +1,6 @@
 window.RAID_DATA = {
   "raid": {
-    "targetPatch": "Midnight Season 1 / current source snapshot 2026-08-13",
+    "targetPatch": "Midnight Season 1",
     "roles": [
       "Tank",
       "Melee",
@@ -1220,7 +1220,7 @@ window.RAID_DATA = {
     ]
   },
   "balance": {
-    "targetPatch": "Midnight Season 1 / current source snapshot 2026-08-13",
+    "targetPatch": "Midnight Season 1",
     "defaultRaidSize": 20,
     "minRaidSize": 20,
     "maxRaidSize": 30,

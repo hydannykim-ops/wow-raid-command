@@ -1,5 +1,7 @@
 # Boss arena maps
 
+맵 그림은 [raidplan.io](https://raidplan.io)에서 허가를 받아 사용했습니다.
+
 원본 파일명 기준으로 등록됨 (`js/board-assets.js` → `BOSS_MAPS`).
 
 | 원본 | 저장 파일 | 보스 |
