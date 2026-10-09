@@ -1,6 +1,7 @@
 /**
- * WCL 영웅 킬 로그의 적 시전으로 영웅 타임라인을 만들고 planner-catalog.js 에 넣는다.
- * .dev.vars 의 WCL_CLIENT_ID / WCL_CLIENT_SECRET 사용
+ * @deprecated 영웅 스킬/페이즈는 Viserio 공식 타임라인을 쓴다.
+ *   scripts/README.md 의 --heroic 파이프라인.
+ * 이 스크립트는 WCL 적 Casts 만 긁어 신화 스펠 ID에 없는 시전을 버린다. 쓰지 말 것.
  */
 import fs from "fs";
 import path from "path";

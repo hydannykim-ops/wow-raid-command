@@ -2,7 +2,8 @@
  * Viserio 타임라인의 페이즈 전환 시각(기준값) 역산
  * WCL 킬 로그에서 "전환 k 이후 보스 기술 첫 시전까지의 오프셋"을 모아
  * Viserio 이벤트 시각 − 오프셋 으로 투표 → 가장 많이 겹치는 시각을 전환 k 의 기준 시각으로 사용
- *   node scripts/derive-phase-starts.mjs  → scripts/phase-starts.json
+ *   node scripts/derive-phase-starts.mjs           → scripts/phase-starts.json (신화)
+ *   node scripts/derive-phase-starts.mjs --heroic  → scripts/phase-starts-heroic.json
  * .dev.vars 의 WCL_CLIENT_ID / WCL_CLIENT_SECRET 사용
  */
 import fs from "fs";
@@ -11,7 +12,10 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
-const outPath = path.join(__dirname, "phase-starts.json");
+const heroic = process.argv.includes("--heroic");
+const wclDifficulty = heroic ? 4 : 5;
+const dumpDir = path.join(root, heroic ? "tmp-viserio-heroic" : "tmp-viserio");
+const outPath = path.join(__dirname, heroic ? "phase-starts-heroic.json" : "phase-starts.json");
 
 const BOSSES = {
   nekzali: 3470,
@@ -73,7 +77,7 @@ async function enemyCasts(code, fightId) {
 }
 
 function loadViserio(id) {
-  const raw = fs.readFileSync(path.join(root, "tmp-viserio", `${id}.json`), "utf8").replace(/^\uFEFF/, "");
+  const raw = fs.readFileSync(path.join(dumpDir, `${id}.json`), "utf8").replace(/^\uFEFF/, "");
   return JSON.parse(raw);
 }
 
@@ -87,7 +91,10 @@ for (const [id, enc] of Object.entries(BOSSES)) {
     visBySpell.get(s).push(Number(e.time));
   }
 
-  const d = await gql(`query($e:Int!){worldData{encounter(id:$e){fightRankings(difficulty:5, metric: speed)}}}`, { e: enc });
+  const d = await gql(
+    `query($e:Int!,$d:Int!){worldData{encounter(id:$e){fightRankings(difficulty:$d, metric: speed)}}}`,
+    { e: enc, d: wclDifficulty }
+  );
   const kills = (d.worldData.encounter.fightRankings?.rankings || []).slice(0, 20);
 
   // votes[k] = Map(roundedSec → count)
@@ -160,36 +167,57 @@ for (const [id, enc] of Object.entries(BOSSES)) {
   });
   const candidates = cands.map((list) => list.map((c) => `${c.t}:${c.score}`).join(" "));
 
-  // 전환 순서대로 시각이 증가하면서 총점이 최대인 조합 (동점이면 이른 시각)
+  // 전환 순서대로 시각이 증가하면서 총점이 최대인 조합 (동점이면 이른 시각).
+  // 짧은 킬을 긴 Viserio 템플릿에 얹으면 같은 루프의 뒷사이클이 1~2점 더 나올 수 있다.
+  // 고른 시각이 그 전환의 WCL 중앙값 × 2.3 보다 크면, 같은 전환의 이른 후보로 당긴다.
   const K = cands.length;
-  const dp = cands.map((list) => list.map(() => ({ total: -Infinity, prev: -1 })));
-  cands[0]?.forEach((c, i) => (dp[0][i] = { total: c.score, prev: -1 }));
-  for (let k = 1; k < K; k++) {
-    cands[k].forEach((c, i) => {
-      cands[k - 1].forEach((p, j) => {
-        if (dp[k - 1][j].total === -Infinity || c.t < p.t + 3) return;
-        const total = dp[k - 1][j].total + c.score;
-        const cur = dp[k][i];
-        if (total > cur.total || (total === cur.total && p.t < cands[k - 1][cur.prev]?.t)) {
-          dp[k][i] = { total, prev: j };
-        }
-      });
+  const paths = [];
+  function walk(k, prevT, total, path) {
+    if (k === K) {
+      paths.push({ total, path: path.slice() });
+      return;
+    }
+    const list = cands[k] || [];
+    if (!list.length) return;
+    for (const c of list) {
+      if (c.t < prevT + 3) continue;
+      path.push(c);
+      walk(k + 1, c.t, total + c.score, path);
+      path.pop();
+    }
+  }
+  walk(0, 0, 0, []);
+  const bestTotal = paths.reduce((m, p) => Math.max(m, p.total), -Infinity);
+  const top = paths
+    .filter((p) => p.total === bestTotal)
+    .sort((a, b) => {
+      for (let i = 0; i < a.path.length; i++) {
+        const dt = a.path[i].t - b.path[i].t;
+        if (dt) return dt;
+      }
+      return 0;
     });
+  const picked = top[0]?.path || [];
+  const sampleTimes = seqs.map((s) => s.split(" ").map((x) => Number(x.split("@")[1])));
+  function median(nums) {
+    const a = nums.filter((n) => Number.isFinite(n)).sort((x, y) => x - y);
+    if (!a.length) return null;
+    const m = Math.floor(a.length / 2);
+    return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
   }
   const starts = [];
-  let lastK = K - 1;
-  while (lastK >= 0 && !dp[lastK].some((x) => x.total > -Infinity)) lastK -= 1;
-  if (lastK >= 0) {
-    let bi = 0;
-    dp[lastK].forEach((x, i) => {
-      const b = dp[lastK][bi];
-      if (x.total > b.total || (x.total === b.total && cands[lastK][i].t < cands[lastK][bi].t)) bi = i;
-    });
-    for (let k = lastK; k >= 0 && bi >= 0; k--) {
-      const c = cands[k][bi];
-      starts.unshift({ index: k, t: c.t, score: c.score });
-      bi = dp[k][bi].prev;
+  for (let k = 0; k < picked.length; k++) {
+    const med = median(sampleTimes.map((row) => row[k]));
+    const bestScore = Math.max(0, ...(cands[k] || []).map((c) => c.score));
+    let c = picked[k];
+    const prevT = starts[k - 1]?.t ?? 0;
+    if (med != null && c.t > med * 2.3) {
+      const alt = (cands[k] || [])
+        .filter((x) => x.t >= prevT + 3 && x.score >= bestScore * 0.7)
+        .sort((a, b) => a.t - b.t)[0];
+      if (alt) c = alt;
     }
+    starts.push({ index: k, t: c.t, score: c.score });
   }
   result[id] = { phaseStarts: starts, samples: seqs, candidates };
   console.log(`- ${id}: ${starts.map((s) => `#${s.index + 1}@${s.t}(${s.score})`).join(" ")}  | logs: ${seqs.join(" || ")}`);

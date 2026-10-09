@@ -9,7 +9,7 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
-const dumpDir = path.join(root, "tmp-viserio");
+const dumpDirs = [path.join(root, "tmp-viserio"), path.join(root, "tmp-viserio-heroic")];
 const catalogPath = path.join(root, "js", "planner-catalog.js");
 const cachePath = path.join(__dirname, "spell-names-ko.json");
 const refresh = process.argv.includes("--refresh");
@@ -19,7 +19,8 @@ const cache = !refresh && fs.existsSync(cachePath) ? JSON.parse(fs.readFileSync(
 const ids = new Set();
 let src = fs.readFileSync(catalogPath, "utf8");
 for (const m of src.matchAll(/spellId: (\d+)/g)) ids.add(Number(m[1]));
-if (fs.existsSync(dumpDir)) {
+for (const dumpDir of dumpDirs) {
+  if (!fs.existsSync(dumpDir)) continue;
   for (const f of fs.readdirSync(dumpDir).filter((x) => x.endsWith(".json"))) {
     const dump = JSON.parse(fs.readFileSync(path.join(dumpDir, f), "utf8").replace(/^\uFEFF/, ""));
     for (const e of dump.events || []) if (e.spellId) ids.add(Number(e.spellId));

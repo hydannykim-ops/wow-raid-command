@@ -391,6 +391,11 @@
     return list.find((b) => b.id === id) || list[0];
   }
 
+  /** 현재 난이도(영웅/신화) 카탈로그. 페이즈·스킬은 반드시 이쪽을 쓴다. */
+  function catalogBoss(id = bossId) {
+    return bossForDifficulty(rawBoss(id));
+  }
+
   function planSlotId(id = bossId, d = wclDifficulty) {
     return `${id}:${d}`;
   }
@@ -471,7 +476,7 @@
   }
 
   function phaseSegmentFor(id, sec) {
-    const boss = rawBoss(id);
+    const boss = catalogBoss(id);
     return basePhases(boss).length ? segmentOf(sec, phaseStartsFor(boss)) : -1;
   }
 
@@ -522,7 +527,7 @@
    * 삭제하지 않고 숨겨 두었다가 페이즈가 길어지면 다시 보이게 함
    */
   function hiddenAssignTest(id = bossId) {
-    const boss = rawBoss(id);
+    const boss = catalogBoss(id);
     if (!boss) return () => false;
     const starts = basePhases(boss).length ? phaseStartsFor(boss) : [];
     const adjusted = adjustBoss(boss);
@@ -540,7 +545,7 @@
 
   /** 숨겨진 배치 설명: 소속 페이즈가 우리 타임라인에서 언제 끝나는지 */
   function hiddenReason(a, id = bossId) {
-    const boss = rawBoss(id);
+    const boss = catalogBoss(id);
     const starts = boss && basePhases(boss).length ? phaseStartsFor(boss) : [];
     const sec = Number(a.t) || 0;
     const k = Number.isInteger(a.ph) && a.ph < starts.length ? a.ph : segmentOf(sec, starts);
@@ -620,7 +625,7 @@
 
   /** 전환 시각 변경 + 그 보스의 공대원 배치도 같은 구간 기준으로 이동 */
   function setPhaseStarts(id, starts, source, info) {
-    const boss = rawBoss(id);
+    const boss = catalogBoss(id);
     if (!boss || !basePhases(boss).length) return;
     const before = phaseStartsFor(boss);
     if (starts) phaseOverrides[phaseKey(id)] = { starts: starts.map((s) => Math.round(Number(s) || 0)), source, info: info || null };
@@ -1493,7 +1498,7 @@
 
   /** 초 → "2페이즈 +0:20" */
   function phaseRelLabel(sec, ph) {
-    const boss = rawBoss(bossId);
+    const boss = catalogBoss(bossId);
     const starts = basePhases(boss).length ? phaseStartsFor(boss) : [];
     const k = Number.isInteger(ph) && ph < starts.length ? ph : segmentOf(sec, starts);
     if (k < 0) return starts.length ? t(`1페이즈 +${fmtTime(sec)}`, `P1 +${fmtTime(sec)}`) : fmtTime(sec);
@@ -2642,7 +2647,7 @@
     const handle = e.target.closest?.("[data-rp='phase-drag']");
     if (!handle) return;
     const idx = Number(handle.dataset.idx);
-    const starts = phaseStartsFor(rawBoss(bossId));
+    const starts = phaseStartsFor(catalogBoss(bossId));
     if (!(idx >= 0 && idx < starts.length)) return;
     e.preventDefault();
     const from = starts[idx];
@@ -4259,7 +4264,7 @@
     else assignmentsByBoss[forBossId] = list;
     let placed = 0;
     // 로그 전환 k 와 플래너 전환 k 를 맞춰 구간 상대 시각으로 이동. 전환 기록이 없으면 전투 시각 그대로
-    const rawB = rawBoss(forBossId);
+    const rawB = catalogBoss(forBossId);
     const planStarts = basePhases(rawB).length ? phaseStartsFor(rawB) : [];
     const logStarts = (parsed.phases || [])
       .map((p) => Number(p.startSec) || 0)
@@ -4323,7 +4328,7 @@
    * 익명 로그는 플레이어를 특정할 수 없어 제외. 끝까지 없으면 전환이 가장 많은 로그 사용
    */
   async function pickPhasedLog(rankings, abilityIds, forBossId) {
-    const need = basePhases(rawBoss(forBossId)).length;
+    const need = basePhases(catalogBoss(forBossId)).length;
     const cands = (rankings || []).filter(
       (r) => r.reportCode && r.fightId != null && r.name && r.name !== "Anonymous"
     );
@@ -4352,7 +4357,7 @@
 
   /** 킬 로그 상위·하위 10 개의 전환 시각 평균으로 현재 보스 페이즈 맞추기 */
   async function phaseSync() {
-    const boss = rawBoss(bossId);
+    const boss = catalogBoss(bossId);
     const base = basePhases(boss);
     const encounterId = currentWclEncounterId();
     if (!base.length || !encounterId || phaseSyncing) return;
@@ -4412,7 +4417,7 @@
   }
 
   function setPhaseStartAt(idx, sec) {
-    const boss = rawBoss(bossId);
+    const boss = catalogBoss(bossId);
     const starts = phaseStartsFor(boss);
     if (!(idx >= 0 && idx < starts.length) || !Number.isFinite(sec)) return;
     const lo = (starts[idx - 1] || 0) + 1;
@@ -4424,7 +4429,7 @@
   }
 
   function renderPhaseBar() {
-    const boss = rawBoss(bossId);
+    const boss = catalogBoss(bossId);
     const base = basePhases(boss);
     if (!base.length) {
       return `<div class="rp-phase-bar empty"><b>${t("페이즈", "Phases")}</b><span class="rp-phase-note">${t(
@@ -4667,7 +4672,7 @@
       });
       if (!parsed.ok) throw new Error(parsed.error || "parse failed");
       const placed = applyWclCasts(parsed, abilityIds, [player], runBossId);
-      const need = basePhases(rawBoss(runBossId)).length;
+      const need = basePhases(catalogBoss(runBossId)).length;
       const have = logTransitionCount(parsed);
       const phaseNote =
         need && have < need ? t(` · ⚠ 전환 기록 ${have}/${need}개`, ` · ⚠ ${have}/${need} transitions`) : "";
@@ -4691,7 +4696,7 @@
     const player = activeRoster().find((m) => m.playerId === pick.playerId);
     if (!player) return "";
     const { who, accent, spec } = personBundleMeta(player);
-    const rawB = rawBoss(pick.bossId);
+    const rawB = catalogBoss(pick.bossId);
     const cols = phaseColumns(rawB);
     const planStarts = cols.length ? phaseStartsFor(rawB) : [];
     const rows = wclPickCache[pick.key] || [];
@@ -4782,7 +4787,7 @@
    * 페이즈 시간차로 못 쓰는(회색) 배치는 제외
    */
   function buildNsrtNote() {
-    const raw = rawBoss(bossId);
+    const raw = catalogBoss(bossId);
     if (!raw) return { text: "", lines: 0, unnamed: [] };
     const starts = basePhases(raw).length ? phaseStartsFor(raw) : [];
     const hidden = hiddenAssignTest(bossId);
