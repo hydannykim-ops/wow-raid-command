@@ -472,7 +472,7 @@
             skills: [
               { id: "echo_wave", type: "aoe1", name: "Echo Wave", nameKo: "메아리 파동", interval: 8, hitMult: 0.9 },
               { id: "twin_link", type: "random", name: "Twin Link", nameKo: "쌍생 연결", interval: 7, hitMult: 2.2, count: 2 },
-              { id: "echo_pool", type: "drop", name: "Echo Pool", nameKo: "메아리 웅덩이", interval: 18, hitMult: 0.8 },
+              { id: "echo_pool", type: "drop", name: "Echo Pool", nameKo: "메아리 웅덩이", interval: 22, hitMult: 0.5 },
             ],
           },
           {
@@ -484,8 +484,8 @@
               { id: "twin_link", type: "random", name: "Twin Link", nameKo: "쌍생 연결", interval: 6, hitMult: 2.0, count: 4 },
               { id: "echo_wave", type: "aoe1", name: "Echo Wave", nameKo: "메아리 파동", interval: 7, hitMult: 1.15 },
               { id: "resonance", type: "aoe2", name: "Resonance", nameKo: "공명", interval: 13, hitMult: 1.7 },
-              { id: "twin_verdict", type: "shared", name: "Twin Verdict", nameKo: "쌍생 심판", interval: 20, hitMult: 3.0, soakers: 6 },
-              { id: "echo_pool", type: "drop", name: "Echo Pool", nameKo: "메아리 웅덩이", interval: 16, hitMult: 0.8 },
+              { id: "twin_verdict", type: "shared", name: "Twin Verdict", nameKo: "쌍생 심판", interval: 24, hitMult: 2.2, soakers: 5 },
+              { id: "echo_pool", type: "drop", name: "Echo Pool", nameKo: "메아리 웅덩이", interval: 20, hitMult: 0.5 },
             ],
           },
         ],
@@ -513,7 +513,7 @@
             skills: [
               { id: "swarm_bite", type: "aoe1", name: "Swarm Bite", nameKo: "무리의 이빨", interval: 6, hitMult: 1.05 },
               { id: "void_infest", type: "random", name: "Void Infest", nameKo: "공허 감염", interval: 12, hitMult: 1.55, count: 5 },
-              { id: "void_pool", type: "drop", name: "Void Pool", nameKo: "공허 웅덩이", interval: 16, hitMult: 0.8 },
+              { id: "void_pool", type: "drop", name: "Void Pool", nameKo: "공허 웅덩이", interval: 20, hitMult: 0.5 },
             ],
           },
           {
@@ -524,8 +524,8 @@
               { id: "swarm_bite", type: "aoe1", name: "Swarm Bite", nameKo: "무리의 이빨", interval: 5, hitMult: 1.15 },
               { id: "devour", type: "tankBuster", name: "Devour", nameKo: "포식", interval: 14, hitMult: 5.0 },
               { id: "void_infest", type: "random", name: "Void Infest", nameKo: "공허 감염", interval: 8, hitMult: 4, count: 6 },
-              { id: "void_pool", type: "drop", name: "Void Pool", nameKo: "공허 웅덩이", interval: 18, hitMult: 0.8, count: 2 },
-              { id: "hive_crush", type: "shared", name: "Hive Crush", nameKo: "군락 압착", interval: 24, hitMult: 2.8, soakers: 5 },
+              { id: "void_pool", type: "drop", name: "Void Pool", nameKo: "공허 웅덩이", interval: 22, hitMult: 0.5, count: 2 },
+              { id: "hive_crush", type: "shared", name: "Hive Crush", nameKo: "군락 압착", interval: 26, hitMult: 2.2, soakers: 5 },
             ],
           },
         ],

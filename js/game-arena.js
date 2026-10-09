@@ -17,6 +17,12 @@
   let scale = 1;
   let lastNow = 0;
   let hoverId = null;
+  let hoverMarker = null;
+  let cursorPt = null;
+  let dragKind = null;
+  let dragMember = null;
+  let downPt = null;
+  let suppressClick = false;
   let combatRef = null;
   const disp = new Map();
   const iconCache = new Map();
@@ -31,8 +37,11 @@
     canvas = cv;
     ctx = cv.getContext("2d");
     cv.addEventListener("click", onClick);
+    cv.addEventListener("mousedown", onDown);
+    cv.addEventListener("contextmenu", onContext);
     cv.addEventListener("mousemove", onMove);
     cv.addEventListener("mouseleave", onLeave);
+    global.addEventListener("mouseup", onUp);
     lastNow = performance.now();
     raf = requestAnimationFrame(loop);
   }
@@ -42,9 +51,14 @@
     raf = 0;
     if (canvas) {
       canvas.removeEventListener("click", onClick);
+      canvas.removeEventListener("mousedown", onDown);
+      canvas.removeEventListener("contextmenu", onContext);
       canvas.removeEventListener("mousemove", onMove);
       canvas.removeEventListener("mouseleave", onLeave);
     }
+    global.removeEventListener("mouseup", onUp);
+    dragKind = null;
+    dragMember = null;
     canvas = null;
     ctx = null;
     combatRef = null;
@@ -110,12 +124,13 @@
     const raid = eng.player;
     const boss = eng.boss;
     const AR = Arena();
-    const cbt = raid?.combat && raid.combat.bossId === boss.id ? raid.combat : null;
+    const cbt = raid?.state === "fighting" && raid.combat && raid.combat.bossId === boss.id ? raid.combat : null;
+    const markers = eng.getMarkers?.() || {};
     if (cbt) {
       const now = AR.combatNow(cbt) + (cbt.finished ? 0 : Math.min(AR.TICK, eng._combatAcc || 0));
-      return { eng, raid, boss, cbt, cfg: cbt.arena, members: cbt.members, now, bossPos: cbt.bossPos };
+      return { eng, raid, boss, cbt, cfg: cbt.arena, members: cbt.members, now, bossPos: cbt.bossPos, markers };
     }
-    const layout = AR.layout(raid.members, boss.id);
+    const layout = AR.layout(raid.members, boss.id, eng.getFormation?.());
     const members = raid.members.map((m) => ({
       ...m,
       ...layout.homes[m.id],
@@ -133,6 +148,7 @@
       now: 0,
       bossPos: { x: layout.cfg.boss.x, y: layout.cfg.boss.y },
       activeTankId: members.find((m) => m.role === "Tank")?.id,
+      markers,
     };
   }
 
@@ -146,13 +162,153 @@
       disp.clear();
     }
     drawMap(s);
+    if (s.cbt) drawPools(s);
+    drawMarkers(s);
+    drawMeleeRange(s);
     if (s.cbt) drawHazards(s);
     drawBoss(s);
     drawFxUnder(s);
     drawMembers(s, dt);
     drawFxOver(s);
+    drawPlacing(s);
     drawHover(s);
     drawOverlay(s);
+  }
+
+  function meleeReach() {
+    const AR = Arena();
+    return AR.BOSS_RADIUS + AR.MELEE_RANGE;
+  }
+
+  function isMeleeRole(m) {
+    return m.role === "Melee" || m.role === "Tank";
+  }
+
+  function outOfReach(s, m, p) {
+    return isMeleeRole(m) && Math.hypot(p.x - s.bossPos.x, p.y - s.bossPos.y) > meleeReach();
+  }
+
+  /** 근딜·탱이 보스를 때릴 수 있는 범위 (보스 중심 기준) */
+  function drawMeleeRange(s) {
+    const { x, y } = s.bossPos;
+    const R = meleeReach();
+    const dragged = dragMember && s.members.find((m) => m.id === dragMember);
+    const focus = !s.cbt && (!dragged || isMeleeRole(dragged));
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, y, R, 0, Math.PI * 2);
+    if (!s.cbt) {
+      ctx.fillStyle = `rgba(224,103,74,${focus && dragged ? 0.16 : 0.09})`;
+      ctx.fill();
+    }
+    ctx.setLineDash(s.cbt ? [3, 6] : [6, 5]);
+    ctx.lineWidth = s.cbt ? 1 : focus && dragged ? 2.5 : 1.8;
+    ctx.strokeStyle = s.cbt ? "rgba(255,150,120,0.22)" : `rgba(255,140,100,${focus ? 0.85 : 0.45})`;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (!s.cbt) {
+      const label = opts?.lang?.() === "en" ? "Melee range" : "근접 사거리";
+      ctx.font = "bold 11px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(0,0,0,0.85)";
+      ctx.fillStyle = "#ffb08c";
+      ctx.strokeText(label, x, y + R + 4);
+      ctx.fillText(label, x, y + R + 4);
+    }
+    ctx.restore();
+  }
+
+  const MARKER_R = 15;
+  const MARKER_RING = { square: "91,157,255", cross: "255,91,91" };
+
+  /** [{kind, index, x, y}] — square 1개 + cross 여러 개 */
+  function markerList(mk) {
+    const out = [];
+    if (mk?.square) out.push({ kind: "square", index: 0, x: mk.square.x, y: mk.square.y });
+    (mk?.cross || []).forEach((p, i) => out.push({ kind: "cross", index: i, x: p.x, y: p.y }));
+    return out;
+  }
+
+  function sameMarker(a, b) {
+    return !!a && !!b && a.kind === b.kind && a.index === b.index;
+  }
+
+  function drawMarkers(s) {
+    const A = Assets();
+    const list = markerList(s.markers);
+    const crossN = list.filter((m) => m.kind === "cross").length;
+    list.forEach((mk) => {
+      const dragging = sameMarker(dragKind, mk);
+      const p = dragging && cursorPt ? cursorPt : mk;
+      const hot = sameMarker(hoverMarker, mk) || dragging;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, MARKER_R + 7, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${MARKER_RING[mk.kind]},${hot ? 0.28 : 0.16})`;
+      ctx.fill();
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = hot ? 2 : 1.5;
+      ctx.strokeStyle = `rgba(${MARKER_RING[mk.kind]},0.75)`;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (A) A.drawRaidMarker(ctx, `marker-${mk.kind}`, p.x, p.y, MARKER_R);
+      if (mk.kind === "cross" && crossN > 1) {
+        ctx.font = "bold 11px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "rgba(0,0,0,0.9)";
+        ctx.fillStyle = "#ffd0d0";
+        ctx.strokeText(String(mk.index + 1), p.x + MARKER_R + 4, p.y - MARKER_R + 2);
+        ctx.fillText(String(mk.index + 1), p.x + MARKER_R + 4, p.y - MARKER_R + 2);
+      }
+      ctx.restore();
+    });
+  }
+
+  function drawPlacing(s) {
+    const tool = opts?.getTool?.();
+    if (!tool || !cursorPt || dragKind || hoverMarker) return;
+    const A = Assets();
+    ctx.save();
+    ctx.globalAlpha = 0.6;
+    ctx.beginPath();
+    ctx.arc(cursorPt.x, cursorPt.y, MARKER_R + 7, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(${MARKER_RING[tool]},0.9)`;
+    ctx.setLineDash([4, 4]);
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    if (A) A.drawRaidMarker(ctx, `marker-${tool}`, cursorPt.x, cursorPt.y, MARKER_R);
+    ctx.restore();
+  }
+
+  function drawPools(s) {
+    (s.cbt.pools || []).forEach((p) => {
+      const left = p.until - s.now;
+      const fade = Math.max(0, Math.min(1, left / 4));
+      const grow = Math.max(0.2, Math.min(1, (s.now - p.castAt) / 0.4));
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius * grow, 0, Math.PI * 2);
+      const g = ctx.createRadialGradient(p.x, p.y, p.radius * 0.2, p.x, p.y, p.radius);
+      g.addColorStop(0, `rgba(120,230,90,${0.42 * fade})`);
+      g.addColorStop(1, `rgba(60,170,60,${0.22 * fade})`);
+      ctx.fillStyle = g;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = `rgba(140,255,110,${(0.55 + 0.15 * Math.sin(s.now * 4)) * fade})`;
+      ctx.stroke();
+      if (left < 60) {
+        ctx.font = "bold 10px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = `rgba(220,255,210,${0.85 * fade})`;
+        ctx.fillText(`${Math.ceil(Math.max(0, left))}s`, p.x, p.y);
+      }
+      ctx.restore();
+    });
   }
 
   function drawMap(s) {
@@ -199,24 +355,61 @@
     }
   }
 
+  function hazardColor(h) {
+    if (h.mode === "shared") return "255,196,60";
+    if (h.mode === "drop") return "110,220,80";
+    return h.fatal ? "170,60,255" : "255,70,50";
+  }
+
   function drawHazards(s) {
+    const AR = Arena();
+    const ko = opts?.lang?.() !== "en";
     s.cbt.hazards.forEach((h) => {
       const p = Math.max(0, Math.min(1, (s.now - h.castAt) / Math.max(0.1, h.at - h.castAt)));
-      const fatal = !!h.fatal;
-      const base = fatal ? "170,60,255" : "255,70,50";
+      const base = hazardColor(h);
+      const carried = h.mode === "shared" || h.mode === "drop";
+      const fh = carried && h.followId && disp.get(h.followId) ? { ...h, ...disp.get(h.followId) } : h;
       ctx.save();
-      hazardPath(h);
+      hazardPath(fh);
       ctx.fillStyle = `rgba(${base},${0.16 + 0.08 * Math.sin(s.now * 12)})`;
       ctx.fill();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = `rgba(${base},0.9)`;
+      ctx.lineWidth = carried ? 2.5 : 2;
+      if (h.mode === "shared") ctx.setLineDash([7, 5]);
+      ctx.strokeStyle = `rgba(${base},0.95)`;
       ctx.stroke();
-      hazardPath(h, p);
+      ctx.setLineDash([]);
+      hazardPath(fh, p);
       ctx.fillStyle = `rgba(${base},0.32)`;
       ctx.fill();
-      if (h.shape === "circle" && h.radius >= 40) {
+      ctx.textAlign = "center";
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(0,0,0,0.8)";
+      if (h.mode === "shared") {
+        const need = Math.max(1, h.skill?.soakers ?? 5);
+        const inside = s.members.filter((m) => m.alive !== false && AR.pointInHazard(h, m.x, m.y, 0)).length;
+        const label = `${inside}/${need}`;
+        ctx.font = "bold 13px system-ui, sans-serif";
+        ctx.fillStyle = inside >= need ? "#9dff8a" : "#ffd84d";
+        ctx.strokeText(label, fh.x, fh.y - fh.radius - 6);
+        ctx.fillText(label, fh.x, fh.y - fh.radius - 6);
+      } else if (h.mode === "drop") {
+        const label = ko ? "장판 남김" : "Drop";
         ctx.font = "bold 11px system-ui, sans-serif";
-        ctx.textAlign = "center";
+        ctx.fillStyle = "#d6ffc8";
+        ctx.strokeText(label, fh.x, fh.y - fh.radius - 5);
+        ctx.fillText(label, fh.x, fh.y - fh.radius - 5);
+        if (h.dropSpot) {
+          ctx.setLineDash([3, 5]);
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = "rgba(140,255,110,0.55)";
+          ctx.beginPath();
+          ctx.moveTo(fh.x, fh.y);
+          ctx.lineTo(h.dropSpot.x, h.dropSpot.y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      } else if (h.shape === "circle" && h.radius >= 40) {
+        ctx.font = "bold 11px system-ui, sans-serif";
         ctx.fillStyle = "rgba(255,230,220,0.9)";
         ctx.fillText(h.name || "", h.x, h.y - h.radius - 5);
       }
@@ -233,11 +426,6 @@
     const offsets = units === 2 ? [-R * 0.8, R * 0.8] : [0];
     const hpPct = cbt ? cbt.bossHp / cbt.bossMaxHp : 1;
     ctx.save();
-    ctx.beginPath();
-    ctx.arc(bossPos.x, bossPos.y, R + AR.MELEE_RANGE, 0, Math.PI * 2);
-    ctx.strokeStyle = "rgba(255,255,255,0.06)";
-    ctx.lineWidth = 1;
-    ctx.stroke();
     offsets.forEach((ox) => {
       const x = bossPos.x + ox;
       const y = bossPos.y;
@@ -274,6 +462,11 @@
   }
 
   function memberPos(s, m, dt) {
+    if (dragMember === m.id && cursorPt && !s.cbt) {
+      const p = { x: cursorPt.x, y: cursorPt.y };
+      disp.set(m.id, p);
+      return p;
+    }
     let p = disp.get(m.id);
     if (!p) {
       p = { x: m.x, y: m.y };
@@ -288,7 +481,8 @@
 
   function drawMembers(s, dt) {
     const activeId = s.cbt ? s.cbt.activeTankId : s.activeTankId;
-    const order = [...s.members].sort((a, b) => (a.alive === b.alive ? 0 : a.alive ? 1 : -1));
+    const rank = (m) => (m.id === dragMember ? 2 : m.alive === false ? 0 : 1);
+    const order = [...s.members].sort((a, b) => rank(a) - rank(b));
     order.forEach((m) => {
       const p = memberPos(s, m, dt);
       const dead = m.alive === false;
@@ -331,9 +525,28 @@
       }
       ctx.beginPath();
       ctx.arc(p.x, p.y, TOKEN_R, 0, Math.PI * 2);
-      ctx.lineWidth = m.id === hoverId ? 3 : 2;
-      ctx.strokeStyle = m.id === hoverId ? "#ffffff" : color;
+      const hot = m.id === hoverId || m.id === dragMember;
+      ctx.lineWidth = hot ? 3 : 2;
+      ctx.strokeStyle = hot ? "#ffffff" : color;
       ctx.stroke();
+
+      if (!s.cbt && outOfReach(s, m, p)) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, TOKEN_R + 3, 0, Math.PI * 2);
+        ctx.setLineDash([3, 3]);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#ff4d4d";
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const warn = opts?.lang?.() === "en" ? "Out of range" : "사거리 밖";
+        ctx.font = "bold 10px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "rgba(0,0,0,0.85)";
+        ctx.fillStyle = "#ff8080";
+        ctx.strokeText(warn, p.x, p.y + TOKEN_R + 13);
+        ctx.fillText(warn, p.x, p.y + TOKEN_R + 13);
+      }
 
       if (s.cbt) {
         const pct = Math.max(0, Math.min(1, m.hp / m.maxHp));
@@ -376,8 +589,20 @@
       } else if (f.kind === "boom" && f.hazard) {
         ctx.save();
         hazardPath(f.hazard);
-        ctx.fillStyle = f.hazard.fatal ? `rgba(200,90,255,${0.65 * (1 - p)})` : `rgba(255,170,60,${0.65 * (1 - p)})`;
+        const c = f.hazard.mode === "drop" ? "140,255,100" : f.hazard.fatal ? "200,90,255" : "255,170,60";
+        ctx.fillStyle = `rgba(${c},${0.65 * (1 - p)})`;
         ctx.fill();
+        ctx.restore();
+      } else if (f.kind === "soak") {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, f.radius * (1 + p * 0.5), 0, Math.PI * 2);
+        const c = f.ok ? "255,215,90" : "255,60,60";
+        ctx.fillStyle = `rgba(${c},${0.45 * (1 - p)})`;
+        ctx.fill();
+        ctx.lineWidth = 5 * (1 - p) + 1;
+        ctx.strokeStyle = `rgba(${c},${0.95 * (1 - p)})`;
+        ctx.stroke();
         ctx.restore();
       }
     });
@@ -473,7 +698,9 @@
       ctx.textAlign = "center";
       ctx.fillStyle = "#d9e3ef";
       ctx.fillText(
-        ko ? "배치 미리보기 — 트라이를 시작하면 공대원이 움직이며 싸웁니다" : "Formation preview — start a try to watch the fight",
+        ko
+          ? "배치 미리보기 — 공대원을 드래그해 기본 자리를 정하세요 · 근딜·탱은 주황 원 안에서만 보스를 때립니다"
+          : "Formation — drag members to set positions · melee/tanks only hit inside the orange ring",
         BW / 2,
         BH - 12
       );
@@ -507,16 +734,109 @@
     return best;
   }
 
+  function hitMarker(pt) {
+    const mk = opts?.getEngine?.()?.getMarkers?.() || {};
+    let best = null;
+    let bestD = MARKER_R + 6;
+    markerList(mk).forEach((m) => {
+      const d = Math.hypot(m.x - pt.x, m.y - pt.y);
+      if (d < bestD) {
+        bestD = d;
+        best = { kind: m.kind, index: m.index };
+      }
+    });
+    return best;
+  }
+
+  function onDown(e) {
+    if (e.button !== 0) return;
+    const pt = boardPoint(e);
+    const hit = hitMarker(pt);
+    if (hit) {
+      dragKind = hit;
+      cursorPt = pt;
+      suppressClick = true;
+      e.preventDefault();
+      return;
+    }
+    const tool = opts?.getTool?.();
+    if (tool) {
+      opts?.onPlace?.(tool, pt.x, pt.y);
+      suppressClick = true;
+      return;
+    }
+    const id = canArrange() ? hitMember(pt) : null;
+    if (id) {
+      dragMember = id;
+      downPt = pt;
+      e.preventDefault();
+    }
+  }
+
+  function canArrange() {
+    const s = state();
+    return !!s && !s.cbt && typeof opts?.onMoveHome === "function";
+  }
+
+  function dragMoved() {
+    return downPt && cursorPt && Math.hypot(cursorPt.x - downPt.x, cursorPt.y - downPt.y) > 4;
+  }
+
+  function onUp() {
+    if (dragMember) {
+      const id = dragMember;
+      const moved = dragMoved();
+      const pt = cursorPt;
+      dragMember = null;
+      downPt = null;
+      if (moved && pt) {
+        suppressClick = true;
+        opts.onMoveHome(id, pt.x, pt.y);
+      }
+      return;
+    }
+    if (!dragKind) return;
+    const { kind, index } = dragKind;
+    const pt = cursorPt;
+    dragKind = null;
+    if (pt) opts?.onPlace?.(kind, pt.x, pt.y, index);
+  }
+
+  function onContext(e) {
+    const hit = hitMarker(boardPoint(e));
+    if (!hit) return;
+    e.preventDefault();
+    hoverMarker = null;
+    opts?.onRemoveMarker?.(hit.kind, hit.index);
+  }
+
   function onMove(e) {
-    hoverId = hitMember(boardPoint(e));
-    canvas.style.cursor = hoverId ? "pointer" : "default";
+    cursorPt = boardPoint(e);
+    if (dragKind || (dragMember && dragMoved())) {
+      canvas.style.cursor = "grabbing";
+      return;
+    }
+    hoverMarker = hitMarker(cursorPt);
+    if (opts?.getTool?.()) {
+      hoverId = null;
+      canvas.style.cursor = hoverMarker ? "grab" : "crosshair";
+      return;
+    }
+    hoverId = hoverMarker ? null : hitMember(cursorPt);
+    canvas.style.cursor = hoverMarker || (hoverId && canArrange()) ? "grab" : hoverId ? "pointer" : "default";
   }
 
   function onLeave() {
     hoverId = null;
+    hoverMarker = null;
+    if (!dragKind && !dragMember) cursorPt = null;
   }
 
   function onClick(e) {
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
     const id = hitMember(boardPoint(e));
     if (!id) return;
     const s = state();

@@ -878,8 +878,22 @@
     return { x: b.cx + (dx / d) * lim, y: b.cy + (dy / d) * lim };
   }
 
-  /** 역할별 기본 자리. 보스는 +y(아래) 방향의 메인탱을 바라봄 */
-  function computeLayout(members, bossId) {
+  /** 플레이어가 정한 자리: 전장 안, 보스 몸통 밖 */
+  function fixHome(cfg, x, y) {
+    let p = clampToBounds(cfg.bounds, x, y, 14);
+    const dx = p.x - cfg.boss.x;
+    const dy = p.y - cfg.boss.y;
+    const d = Math.hypot(dx, dy);
+    const min = BOSS_RADIUS + 10;
+    if (d < min) {
+      const k = d > 0.01 ? min / d : 1;
+      p = clampToBounds(cfg.bounds, cfg.boss.x + (d > 0.01 ? dx * k : 0), cfg.boss.y + (d > 0.01 ? dy * k : min), 14);
+    }
+    return p;
+  }
+
+  /** 역할별 기본 자리. 보스는 +y(아래) 방향의 메인탱을 바라봄 · custom = 플레이어가 드래그로 정한 자리 */
+  function computeLayout(members, bossId, custom) {
     const cfg = arenaConfig(bossId);
     const L = cfg.layout;
     const bx = cfg.boss.x;
@@ -912,7 +926,8 @@
     ring(members.filter((m) => m.role === "Ranged"), L.rangedR || [150, 205], arc);
     ring(members.filter((m) => m.role === "Heal"), L.healR || [118, 160], arc * 0.8);
     Object.keys(homes).forEach((id) => {
-      homes[id] = clampToBounds(cfg.bounds, homes[id].x, homes[id].y, 14);
+      const c = custom?.[id];
+      homes[id] = c ? fixHome(cfg, c.x, c.y) : clampToBounds(cfg.bounds, homes[id].x, homes[id].y, 14);
     });
     return { homes, cfg, tankSpots };
   }
@@ -978,9 +993,15 @@
     return freeSpot(cbt, m.x, m.y, dangerAreas(cbt, m), cbt.homes[m.id] || m, AR.safeMargin ?? 10);
   }
 
-  /** 플레이어가 배치한 징표 (보스별) — square: 같이 맞는 바닥 · cross: 장판 남기는 바닥 */
+  const MAX_CROSS = 6;
+
+  /** 플레이어가 배치한 징표 (보스별) — square: 같이 맞는 바닥 1개 · cross: 장판 남기는 바닥 [여러 개] */
   function getMarkers(raid, bossId) {
-    return raid?.markers?.[bossId] || {};
+    const mk = raid?.markers?.[bossId];
+    if (!mk) return { cross: [] };
+    if (mk.cross && !Array.isArray(mk.cross)) mk.cross = [mk.cross];
+    if (!mk.cross) mk.cross = [];
+    return mk;
   }
 
   /** 웅덩이에 덮인 기본 자리는 가장 가까운 빈 곳으로 옮기고, 웅덩이가 사라지면 원래 자리로 */
@@ -994,32 +1015,44 @@
     });
   }
 
-  /** X 징표 위치. 이미 웅덩이·다른 운반자 자리가 있으면 그 밖에서 X에 가장 가까운 곳 */
+  /**
+   * 장판 깔 자리: X 징표마다 "웅덩이·다른 운반자 자리 밖에서 X에 가장 가까운 곳"을 구하고,
+   * 그중 운반자에게 가장 가까운 곳으로 간다. X가 없으면 제자리.
+   */
   function dropSpot(raid, cbt, m, h) {
-    const X = getMarkers(raid, cbt.bossId).cross;
-    if (!X) return { x: m.x, y: m.y };
+    const crosses = getMarkers(raid, cbt.bossId).cross;
+    if (!crosses.length) return { x: m.x, y: m.y };
     const pr = h.skill?.poolRadius ?? h.radius * 1.3;
     const taken = cbt.hazards.filter((o) => o !== h && o.mode === "drop" && o.dropSpot).map((o) => o.dropSpot);
     const blocked = (x, y) =>
       cbt.pools.some((p) => Math.hypot(x - p.x, y - p.y) < p.radius + pr * 0.55) ||
       taken.some((s) => Math.hypot(x - s.x, y - s.y) < pr * 1.2);
     const b = cbt.arena.bounds;
-    const start = clampToBounds(b, X.x, X.y, 12);
-    if (!blocked(start.x, start.y)) return start;
-    for (let ring = 1; ring <= 40; ring++) {
-      const d = ring * 10;
-      let best = null;
-      for (let k = 0; k < 32; k++) {
-        const a = (k / 32) * Math.PI * 2;
-        const x = start.x + Math.cos(a) * d;
-        const y = start.y + Math.sin(a) * d;
-        if (!insideBounds(b, x, y, 12) || blocked(x, y)) continue;
-        const toMe = Math.hypot(x - m.x, y - m.y);
-        if (!best || toMe < best.toMe) best = { x, y, toMe };
+    const spotNear = (X) => {
+      const start = clampToBounds(b, X.x, X.y, 12);
+      if (!blocked(start.x, start.y)) return start;
+      for (let ring = 1; ring <= 40; ring++) {
+        const d = ring * 10;
+        let best = null;
+        for (let k = 0; k < 32; k++) {
+          const a = (k / 32) * Math.PI * 2;
+          const x = start.x + Math.cos(a) * d;
+          const y = start.y + Math.sin(a) * d;
+          if (!insideBounds(b, x, y, 12) || blocked(x, y)) continue;
+          const toMe = Math.hypot(x - m.x, y - m.y);
+          if (!best || toMe < best.toMe) best = { x, y, toMe };
+        }
+        if (best) return { x: best.x, y: best.y };
       }
-      if (best) return { x: best.x, y: best.y };
-    }
-    return start;
+      return start;
+    };
+    let best = null;
+    crosses.forEach((X, i) => {
+      const p = spotNear(X);
+      const d = Math.hypot(p.x - m.x, p.y - m.y);
+      if (!best || d < best.d) best = { x: p.x, y: p.y, d, crossIndex: i };
+    });
+    return { x: best.x, y: best.y, crossIndex: best.crossIndex };
   }
 
   /** 반응 지연(초) = base + scale × (1 − s/100) × F(M) ± jitter */
@@ -1219,7 +1252,15 @@
       m.task.goal = p;
     } else if (m.task.kind === "soakCarry") {
       const sq = getMarkers(raid, cbt.bossId).square;
-      m.task.goal = sq ? clampToBounds(cbt.arena.bounds, sq.x, sq.y, 12) : { x: m.x, y: m.y };
+      let goal = sq ? clampToBounds(cbt.arena.bounds, sq.x, sq.y, 12) : { x: m.x, y: m.y };
+      const dist = Math.hypot(goal.x - m.x, goal.y - m.y);
+      const reach = Math.max(0, (h.at - combatNow(cbt) - 0.6) * RUN_SPEED);
+      if (dist > reach && dist > 0) {
+        const k = reach / dist;
+        goal = { x: m.x + (goal.x - m.x) * k, y: m.y + (goal.y - m.y) * k };
+      }
+      m.task.goal = goal;
+      h.meet = goal;
     }
     if (m.task.goal) {
       m.tx = m.task.goal.x;
@@ -1236,7 +1277,7 @@
       m.task = null;
       return;
     }
-    const anchor = task.anchor || h;
+    const anchor = h.meet || task.anchor || h;
     const goal =
       task.kind === "soakHelp"
         ? clampToBounds(cbt.arena.bounds, anchor.x + task.ox, anchor.y + task.oy, 10)
@@ -1380,9 +1421,11 @@
     pushFx(cbt, { kind: "boom", hazard: { ...h, skill: null }, dur: 0.6 });
     relocateHomes(cbt);
     alertMembers(raid, boss, pool);
-    const X = getMarkers(raid, cbt.bossId).cross;
-    const nearX = X && Math.hypot(pool.x - X.x, pool.y - X.y) <= pool.radius * 2.2;
-    pushLog(raid, `[장판 남김] ${h.name} → 웅덩이 생성${X ? (nearX ? " (X 징표)" : " (X 징표 못 감)") : ""}`, nearX || !X ? "info" : "warn");
+    const crosses = getMarkers(raid, cbt.bossId).cross;
+    const hasX = crosses.length > 0;
+    const nearIdx = crosses.findIndex((X) => Math.hypot(pool.x - X.x, pool.y - X.y) <= pool.radius * 2.2);
+    const xTag = !hasX ? "" : nearIdx >= 0 ? ` (X${crosses.length > 1 ? nearIdx + 1 : ""} 징표)` : " (X 징표 못 감)";
+    pushLog(raid, `[장판 남김] ${h.name} → 웅덩이 생성${xTag}`, nearIdx >= 0 || !hasX ? "info" : "warn");
     emitCombatEvent(raid, "skill", { skillKind: "random", skillType: spec.type, skillId: spec.id, deaths, doubles: 0 });
   }
 
@@ -1594,7 +1637,7 @@
         mvMult: 1,
       };
     });
-    const layout = computeLayout(members, boss.id);
+    const layout = computeLayout(members, boss.id, raid.formation?.[boss.id]);
     members.forEach((m) => {
       const hm = layout.homes[m.id] || { x: layout.cfg.boss.x, y: layout.cfg.boss.y + 120 };
       m.x = m.tx = hm.x;
@@ -2680,20 +2723,63 @@
     return getMarkers(this.player, this.boss.id);
   };
 
-  /** kind: "square"(같이 맞는 바닥) | "cross"(장판 남기는 바닥) · 전투 중에도 즉시 반영 */
-  GameEngine.prototype.setMarker = function (kind, x, y) {
-    if (kind !== "square" && kind !== "cross") return;
+  /**
+   * kind: "square"(같이 맞는 바닥, 1개) | "cross"(장판 남기는 바닥, 최대 MAX_CROSS개)
+   * cross는 index를 주면 그 징표를 옮기고, 없으면 새로 추가. 전투 중에도 즉시 반영. 반환: 배치된 index
+   */
+  GameEngine.prototype.setMarker = function (kind, x, y, index) {
+    if (kind !== "square" && kind !== "cross") return null;
     const p = clampToBounds(arenaConfig(this.boss.id).bounds, x, y, 12);
     if (!this.player.markers) this.player.markers = {};
-    const cur = this.player.markers[this.boss.id] || {};
-    this.player.markers[this.boss.id] = { ...cur, [kind]: { x: p.x, y: p.y } };
+    const mk = getMarkers(this.player, this.boss.id);
+    this.player.markers[this.boss.id] = mk;
+    if (kind === "square") {
+      mk.square = { x: p.x, y: p.y };
+      return 0;
+    }
+    if (Number.isInteger(index) && mk.cross[index]) {
+      mk.cross[index] = { x: p.x, y: p.y };
+      return index;
+    }
+    if (mk.cross.length >= MAX_CROSS) return null;
+    mk.cross.push({ x: p.x, y: p.y });
+    return mk.cross.length - 1;
+  };
+
+  GameEngine.prototype.removeMarker = function (kind, index) {
+    const mk = this.player.markers?.[this.boss.id];
+    if (!mk) return;
+    if (kind === "square") delete mk.square;
+    else if (kind === "cross") getMarkers(this.player, this.boss.id).cross.splice(index, 1);
   };
 
   GameEngine.prototype.clearMarkers = function (kind) {
     const cur = this.player.markers?.[this.boss.id];
     if (!cur) return;
-    if (kind) delete cur[kind];
+    if (kind === "cross") cur.cross = [];
+    else if (kind) delete cur[kind];
     else delete this.player.markers[this.boss.id];
+  };
+
+  GameEngine.prototype.getFormation = function () {
+    return this.player.formation?.[this.boss.id] || {};
+  };
+
+  /** 트라이 전 기본 자리 지정 (전투 중엔 불가) */
+  GameEngine.prototype.setHome = function (memberId, x, y) {
+    if (this.player.state === "fighting") return null;
+    if (!this.player.members.some((m) => m.id === memberId)) return null;
+    const p = fixHome(arenaConfig(this.boss.id), x, y);
+    if (!this.player.formation) this.player.formation = {};
+    const cur = this.player.formation[this.boss.id] || {};
+    this.player.formation[this.boss.id] = { ...cur, [memberId]: { x: p.x, y: p.y } };
+    return p;
+  };
+
+  GameEngine.prototype.resetFormation = function () {
+    if (this.player.state === "fighting") return false;
+    if (this.player.formation) delete this.player.formation[this.boss.id];
+    return true;
   };
 
   GameEngine.prototype.setBattleRezMode = function (mode) {
@@ -2785,6 +2871,7 @@
     MELEE_RANGE,
     config: arenaConfig,
     layout: computeLayout,
+    MAX_CROSS,
     pointInHazard,
     combatNow,
     getMarkers,

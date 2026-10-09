@@ -18,6 +18,7 @@
   let lastPatchAt = 0;
   let inspectId = null;
   let scoutId = null;
+  let markerTool = null;
   let appRoleFilters = new Set(["Tank", "Heal", "Melee", "Ranged"]);
   const APP_FILTER_ROLES = ["Tank", "Heal", "Melee", "Ranged"];
   const fxDeathUntil = Object.create(null);
@@ -334,8 +335,54 @@
       case "close-scout":
         scoutId = null;
         break;
+      case "marker-tool":
+        markerTool = markerTool === id ? null : id;
+        break;
+      case "marker-clear":
+        markerTool = null;
+        eng.clearMarkers();
+        break;
+      case "formation-reset":
+        eng.resetFormation();
+        break;
     }
+    syncMarkerTools();
     patch(true);
+  }
+
+  function syncMarkerTools() {
+    const eng = E();
+    const mk = eng?.getMarkers?.() || {};
+    const crossN = mk.cross?.length || 0;
+    const crossMax = window.RaidGameEngine?.arena?.MAX_CROSS ?? 6;
+    document.querySelectorAll("#gMarkerTools [data-g-act='marker-tool']").forEach((btn) => {
+      const kind = btn.dataset.id;
+      btn.classList.toggle("active", markerTool === kind);
+      btn.classList.toggle("placed", kind === "cross" ? crossN > 0 : !!mk[kind]);
+      const cnt = btn.querySelector(".mk-count");
+      if (cnt) cnt.textContent = kind === "cross" && crossN ? ` ${crossN}/${crossMax}` : "";
+    });
+    const clr = document.querySelector("#gMarkerTools [data-g-act='marker-clear']");
+    if (clr) clr.disabled = !mk.square && !crossN;
+    const fr = document.querySelector("#gMarkerTools [data-g-act='formation-reset']");
+    if (fr) {
+      fr.disabled = eng?.player?.state === "fighting" || !Object.keys(eng?.getFormation?.() || {}).length;
+    }
+    const hint = $("#gMarkerHint");
+    if (hint) {
+      hint.textContent =
+        markerTool === "cross"
+          ? t(
+              `클릭할 때마다 X 징표 추가 (최대 ${crossMax}개) · 장판은 가장 가까운 X로 · 버튼 다시 누르면 종료`,
+              `Each click adds an X (max ${crossMax}) · drops go to the nearest X · press again to stop`
+            )
+          : markerTool
+            ? t("전장을 클릭해 징표를 놓으세요 (버튼 다시 누르면 취소)", "Click the arena to place (press again to cancel)")
+            : eng?.player?.state === "fighting"
+              ? t("징표 드래그로 이동 · 우클릭으로 삭제 · 전투 중에도 바로 반영", "Drag to move · right-click to delete · applies mid-fight")
+              : t("트라이 전: 공대원·징표를 드래그해 자리를 정하세요 · 징표 우클릭 = 삭제", "Before the try: drag members and markers · right-click marker to delete");
+      hint.title = hint.textContent;
+    }
   }
 
   function ensureShell(force) {
@@ -517,12 +564,26 @@
               <div class="g-raid-frames compact" id="gRaidFrames"></div>
             </div>
             <div class="g-arena-stage">
+              <div class="g-marker-tools" id="gMarkerTools">
+                <button type="button" class="g-mk-btn mk-square" data-g-act="marker-tool" data-id="square" title="${t("같이 맞는 바닥은 여기 모여서 맞습니다", "Soak floors are taken here")}">
+                  <i></i>${t("네모 징표 · 같이 맞기", "Square · soak")}
+                </button>
+                <button type="button" class="g-mk-btn mk-cross" data-g-act="marker-tool" data-id="cross" title="${t("여러 개 배치 가능 · 장판 남기는 바닥은 대상자에게 가장 가까운 X로 가져가 깝니다 (이미 장판이 있으면 그 바깥 가장 가까운 곳)", "Place several · drop floors go to the nearest X (or the nearest free spot)")}">
+                  <i></i>${t("X 징표 · 장판 버리기", "Cross · drop pools")}<span class="mk-count"></span>
+                </button>
+                <button type="button" class="g-mk-btn mk-clear" data-g-act="marker-clear">${t("징표 지우기", "Clear")}</button>
+                <button type="button" class="g-mk-btn mk-reset" data-g-act="formation-reset" title="${t("드래그로 옮긴 자리를 기본 배치로 되돌립니다", "Restore the default formation")}">${t("배치 초기화", "Reset formation")}</button>
+                <span class="g-mk-hint" id="gMarkerHint"></span>
+              </div>
               <div class="g-arena-wrap"><canvas id="gArenaCanvas"></canvas></div>
               <div class="g-arena-legend">
                 <span><i class="lg-zone"></i>${t("예고 장판 — 터질 때 안에 있으면 2배 피격", "Telegraph — 2× damage if inside on detonation")}</span>
+                <span><i class="lg-shared"></i>${t("같이 맞는 바닥 — 인원 모자라면 나눠 맞는 피해↑", "Soak — fewer soakers, more damage each")}</span>
+                <span><i class="lg-drop"></i>${t("장판 남기는 바닥 → 초록 웅덩이", "Drop — leaves a green pool")}</span>
                 <span><i class="lg-tank"></i>${t("메인탱", "Main tank")}</span>
                 <span><b>?</b> ${t("멍때림·엉뚱한 방향", "Blunder")}</span>
-                <span>${t("토큰 클릭: 스펙 보기 · 수동 모드에선 해골 클릭 = 전투부활", "Click token: inspect · manual mode: click skull to brez")}</span>
+                <span><i class="lg-melee"></i>${t("근접 사거리 — 근딜·탱은 이 안에서만 딜", "Melee range — melee/tanks deal damage only inside")}</span>
+                <span>${t("토큰 클릭: 스펙 보기 · 드래그: 트라이 전 자리 지정 · 수동 모드에선 해골 클릭 = 전투부활", "Click: inspect · drag before try: set position · manual mode: click skull to brez")}</span>
               </div>
             </div>
             <div class="g-arena-meters">
@@ -570,6 +631,24 @@
     window.RaidGameArena.attach(cv, {
       getEngine: E,
       lang: () => langRef(),
+      getTool: () => markerTool,
+      onMoveHome: (id, x, y) => {
+        E()?.setHome(id, x, y);
+        syncMarkerTools();
+      },
+      onPlace: (kind, x, y, index) => {
+        const eng = E();
+        if (!eng) return;
+        eng.setMarker(kind, x, y, index);
+        const max = window.RaidGameEngine?.arena?.MAX_CROSS ?? 6;
+        const keep = index == null && kind === "cross" && (eng.getMarkers().cross?.length || 0) < max;
+        if (index == null && !keep) markerTool = null;
+        syncMarkerTools();
+      },
+      onRemoveMarker: (kind, index) => {
+        E()?.removeMarker(kind, index);
+        syncMarkerTools();
+      },
       onPick: (id, dead) => {
         const p = E()?.player;
         const brez = dead && p?.state === "fighting" && p.battleRezMode === "manual" && (p.combat?.battleRezLeft || 0) > 0;
@@ -691,6 +770,8 @@
     const fatal = sp.fatal ? t("·즉사", "·fatal") : "";
     if (shape === "buster") return t("탱버스터·교대", "buster·swap");
     if (shape === "raid") return t("전체 피해", "raid dmg");
+    if (sp.mode === "shared") return t(`같이 맞기 ${sp.soakers ?? 5}인 · □`, `soak ${sp.soakers ?? 5} · □`);
+    if (sp.mode === "drop") return t(`장판 남김${(sp.count ?? 1) > 1 ? "×" + sp.count : ""} · ✕`, `drop pool${(sp.count ?? 1) > 1 ? "×" + sp.count : ""} · ✕`);
     if (shape === "circle" && sp.at === "target") return t(`발밑 장판×${sp.count ?? 3}`, `puddle×${sp.count ?? 3}`) + fatal;
     if (shape === "circle") return t("보스 주변 폭발", "boss nova") + fatal;
     if (shape === "cone") return t("부채꼴", "frontal") + fatal;
@@ -760,6 +841,10 @@
         return t("2배 피격으로 사망", "Died from double hit");
       case "zone":
         return t("장판을 못 피해서 사망", "Died standing in a zone");
+      case "pool":
+        return t("남은 웅덩이를 밟아서 사망", "Died standing in a pool");
+      case "soak":
+        return t("같이 맞기 인원 부족으로 사망", "Died to an under-soaked hit");
       default:
         return t("사망", "Death");
     }
@@ -1531,6 +1616,7 @@
     const fighting = p.state === "fighting" && c && !c.finished;
     syncBrezSelects(p.battleRezMode);
     attachArena();
+    syncMarkerTools();
 
     const kicker = $("#gTryKicker");
     if (kicker) kicker.textContent = `${t("트라이", "Try")} #${p.tries || 0}`;

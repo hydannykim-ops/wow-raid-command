@@ -78,6 +78,8 @@
   let rosterDirty = false;
   let rosterClosePrompt = false;
   let bossId = "nekzali";
+  /** WCL 난이도: 4 영웅, 5 신화 */
+  let wclDifficulty = 5;
   let duration = 360;
   let zoom = 3;
   let collapsedCats = {};
@@ -129,11 +131,13 @@
 
   function syncBossAssignments() {
     syncBossBoard();
-    if (assignmentsBossId === bossId) return;
+    const slot = planSlotId();
+    if (assignmentsBossId === slot) return;
     assignmentsByBoss[assignmentsBossId] = assignments;
-    assignments = assignmentsByBoss[bossId] || [];
-    delete assignmentsByBoss[bossId];
-    assignmentsBossId = bossId;
+    const legacy = wclDifficulty === 5 ? assignmentsByBoss[bossId] : null;
+    assignments = assignmentsByBoss[slot] || legacy || [];
+    delete assignmentsByBoss[slot];
+    assignmentsBossId = slot;
     selectedAssignId = null;
   }
 
@@ -212,7 +216,7 @@
     });
     planPages[planPage] = {
       assignmentsByBoss: copied,
-      boardsByBoss: { ...boardsByBoss, [boardBossId || bossId]: { steps, stepId, mapId: boardMapId } },
+      boardsByBoss: { ...boardsByBoss, [boardBossId || planSlotId()]: { steps, stepId, mapId: boardMapId } },
     };
   }
 
@@ -224,9 +228,11 @@
         assignmentsByBoss[k] = cleanAssigns(list);
       });
     }
-    assignments = assignmentsByBoss[bossId] || [];
-    delete assignmentsByBoss[bossId];
-    assignmentsBossId = bossId;
+    const slot = planSlotId();
+    const legacy = wclDifficulty === 5 ? assignmentsByBoss[bossId] : null;
+    assignments = assignmentsByBoss[slot] || legacy || [];
+    delete assignmentsByBoss[slot];
+    assignmentsBossId = slot;
     boardsByBoss = data.boardsByBoss && typeof data.boardsByBoss === "object" ? { ...data.boardsByBoss } : {};
     boardBossId = null;
     selectedAssignId = null;
@@ -346,14 +352,15 @@
   let boardBossId = null;
 
   function syncBossBoard() {
-    if (boardBossId === bossId) return;
+    const slot = planSlotId();
+    if (boardBossId === slot) return;
     if (boardBossId) boardsByBoss[boardBossId] = { steps, stepId, mapId: boardMapId };
-    const saved = boardsByBoss[bossId];
-    delete boardsByBoss[bossId];
+    const saved = boardsByBoss[slot] || (wclDifficulty === 5 ? boardsByBoss[bossId] : null);
+    delete boardsByBoss[slot];
     steps = Array.isArray(saved?.steps) && saved.steps.length ? saved.steps : defaultSteps();
     stepId = saved?.stepId && steps.some((s) => s.id === saved.stepId) ? saved.stepId : steps[0].id;
     boardMapId = saved?.mapId || null;
-    boardBossId = bossId;
+    boardBossId = slot;
     selectedObjIds.clear();
     handlePreviewId = null;
     undoStack = [];
@@ -384,12 +391,48 @@
     return list.find((b) => b.id === id) || list[0];
   }
 
+  function planSlotId(id = bossId, d = wclDifficulty) {
+    return `${id}:${d}`;
+  }
+
+  function phaseKey(id = bossId) {
+    return `${id}:${wclDifficulty}`;
+  }
+
+  function bossForDifficulty(raw, d = wclDifficulty) {
+    if (!raw) return raw;
+    const pack = d === 4 ? raw.heroic : null;
+    if (d === 4 && pack) {
+      return {
+        ...raw,
+        wclDifficulty: 4,
+        duration: pack.duration || raw.duration,
+        phases: Array.isArray(pack.phases) ? pack.phases : raw.phases,
+        events: pack.events || raw.events,
+        majorSpellIds: pack.majorSpellIds || raw.majorSpellIds,
+      };
+    }
+    return { ...raw, wclDifficulty: d === 4 ? 4 : 5 };
+  }
+
   function currentBoss() {
-    return adjustBoss(rawBoss(bossId));
+    return adjustBoss(bossForDifficulty(rawBoss(bossId)));
   }
 
   function bossById(id) {
-    return adjustBoss(rawBoss(id));
+    return adjustBoss(bossForDifficulty(rawBoss(id)));
+  }
+
+  function setDifficulty(d) {
+    const next = Number(d) === 4 ? 4 : 5;
+    if (next === wclDifficulty) return;
+    wclDifficulty = next;
+    syncBossAssignments();
+    const boss = currentBoss();
+    if (boss) duration = boss.duration;
+    requestFitZoom();
+    render(true);
+    saveState();
   }
 
   /** 카탈로그(Viserio 타임라인) 기준 페이즈 전환 */
@@ -400,7 +443,7 @@
   /** 적용 중인 전환 시각 (조정값 → 없으면 기준값), 항상 증가하도록 보정 */
   function phaseStartsFor(boss) {
     const base = basePhases(boss);
-    const ov = phaseOverrides[boss?.id]?.starts;
+    const ov = phaseOverrides[phaseKey(boss?.id)]?.starts || (wclDifficulty === 5 ? phaseOverrides[boss?.id]?.starts : null);
     let prev = 0;
     return base.map((p, i) => {
       const v = Number(ov?.[i]);
@@ -521,8 +564,9 @@
     const base = basePhases(boss).map((p) => Number(p.t) || 0);
     if (!boss || !base.length) return boss;
     const starts = phaseStartsFor(boss);
-    const key = `${boss.id}|${starts.join(",")}`;
-    const hit = adjustedBossCache.get(boss.id);
+    const key = `${boss.id}|${boss.wclDifficulty || wclDifficulty}|${starts.join(",")}`;
+    const cacheId = `${boss.id}:${boss.wclDifficulty || wclDifficulty}`;
+    const hit = adjustedBossCache.get(cacheId);
     if (hit?.key === key && hit.src === boss) return hit.boss;
     const homes = spellHomeSegments(boss, base);
     let end = Number(boss.duration) || 0;
@@ -562,7 +606,7 @@
       events.push(out);
     });
     const adjusted = { ...boss, events, duration: Math.max(end, (starts[starts.length - 1] || 0) + 30), staleIds };
-    adjustedBossCache.set(boss.id, { key, src: boss, boss: adjusted });
+    adjustedBossCache.set(cacheId, { key, src: boss, boss: adjusted });
     return adjusted;
   }
 
@@ -579,8 +623,8 @@
     const boss = rawBoss(id);
     if (!boss || !basePhases(boss).length) return;
     const before = phaseStartsFor(boss);
-    if (starts) phaseOverrides[id] = { starts: starts.map((s) => Math.round(Number(s) || 0)), source, info: info || null };
-    else delete phaseOverrides[id];
+    if (starts) phaseOverrides[phaseKey(id)] = { starts: starts.map((s) => Math.round(Number(s) || 0)), source, info: info || null };
+    else delete phaseOverrides[phaseKey(id)];
     const after = phaseStartsFor(boss);
     savePhaseOverrides();
     const nextDuration = adjustBoss(boss).duration;
@@ -592,8 +636,9 @@
         const next = k < 0 ? sec : after[k] + (sec - before[k]);
         return { ...a, ph: k, t: Math.max(0, Math.round(next)) };
       });
-    if (id === assignmentsBossId) assignments = move(assignments);
-    else if (assignmentsByBoss[id]) assignmentsByBoss[id] = move(assignmentsByBoss[id]);
+    const slot = planSlotId(id);
+    if (slot === assignmentsBossId) assignments = move(assignments);
+    else if (assignmentsByBoss[slot]) assignmentsByBoss[slot] = move(assignmentsByBoss[slot]);
     if (id === bossId) duration = nextDuration;
   }
 
@@ -833,12 +878,12 @@
     if (!rosterOpen) pruneAssignmentsToRoster();
   }
 
-  function importHelperRoster() {
+  function membersFromHelper() {
     const fromHelper = helperRosterRef() || [];
-    if (!fromHelper.length) return false;
-    const prevSrc = rosterOpen ? [...editRoster, ...editBench] : [...localRoster, ...localBench];
+    if (!fromHelper.length) return null;
+    const prevSrc = [...localRoster, ...localBench, ...editRoster, ...editBench];
     const prev = new Map(prevSrc.map((m) => [m.playerId, { nick: m.nick || "", server: memberRealm(m) }]));
-    const next = fromHelper.map((s, i) => {
+    return fromHelper.map((s, i) => {
       const playerId = s.instanceId || `h-${i}`;
       const keep = prev.get(playerId) || {};
       return {
@@ -848,13 +893,95 @@
         server: keep.server || normalizeRealm(s.server) || DEFAULT_REALM,
       };
     });
+  }
+
+  function importHelperRoster() {
+    const next = membersFromHelper();
+    if (!next) return false;
     rosterMode = "helper";
     placeRoster(next);
     if (rosterOpen) return true;
-    activeRaidId = null;
     pruneAssignmentsToRoster();
     dropUnusableAssignments();
     return true;
+  }
+
+  function isSavedRaidId(id) {
+    return Boolean(id) && id !== TEMP_RAID_ID;
+  }
+
+  function isTempRaid() {
+    return !shareReadonly && activeRaidId === TEMP_RAID_ID;
+  }
+
+  function tempRaidLabel() {
+    return t("임시 공대", "Temporary raid");
+  }
+
+  function tempStorageKey() {
+    return `${STORE_KEY}:${currentAuthId() || "anon"}:temp`;
+  }
+
+  function readTempWorkspace() {
+    try {
+      const data = JSON.parse(localStorage.getItem(tempStorageKey()) || "null");
+      return data && typeof data === "object" ? data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeTempWorkspace() {
+    if (shareReadonly) return;
+    try {
+      snapshotCurrentPage();
+      localStorage.setItem(tempStorageKey(), JSON.stringify({ version: 1, plan: currentPlanSnapshot() }));
+    } catch (_) {
+      /* quota */
+    }
+  }
+
+  function applyTempWorkspace(plan, membersFallback) {
+    applyPlanSnapshot(plan || blankRaidPlan(), membersFallback || []);
+    rosterMode = "helper";
+    activeRaidId = TEMP_RAID_ID;
+    if (rosterOpen) beginRosterEdit();
+  }
+
+  async function persistCurrentIfSaved() {
+    if (shareReadonly) return;
+    if (isSavedRaidId(activeRaidId) && global.RaidStore?.isLoggedIn()) {
+      await persistActiveRaid({ quiet: true, id: activeRaidId });
+      return;
+    }
+    if (isTempRaid()) writeTempWorkspace();
+  }
+
+  async function enterTempFromHelper() {
+    const next = membersFromHelper();
+    if (!next) return false;
+    await persistCurrentIfSaved();
+    const plan = blankRaidPlan();
+    plan.localRoster = next.map(slimMember);
+    plan.localBench = [];
+    plan.rosterCap = clampRosterCap(Math.max(rosterCap, Math.min(next.length, ROSTER_CAP_MAX)));
+    applyTempWorkspace(plan, next);
+    writeTempWorkspace();
+    writePlannerPrefs();
+    return true;
+  }
+
+  async function switchToTempRaid() {
+    if (activeRaidId === TEMP_RAID_ID) return;
+    if (!confirmDiscardRosterDraft()) {
+      renderCd();
+      return;
+    }
+    await persistCurrentIfSaved();
+    const stored = readTempWorkspace()?.plan;
+    applyTempWorkspace(stored, stored?.localRoster || []);
+    render(true);
+    saveState();
   }
 
   function dropUnusableAssignments() {
@@ -873,14 +1000,6 @@
         p.assignmentsByBoss[k] = (p.assignmentsByBoss[k] || []).filter(keep);
       });
     });
-  }
-
-  function isTempRaid() {
-    return rosterMode === "helper" && !activeRaidId;
-  }
-
-  function tempRaidLabel() {
-    return t("임시 공대", "Temporary raid");
   }
 
   function findRosterMember(playerId) {
@@ -1101,7 +1220,7 @@
     const base = basePhases(boss);
     if (!base.length) return null;
     const starts = phaseStartsFor(boss);
-    const per = phaseOverrides[boss.id]?.info?.per || [];
+    const per = phaseOverrides[phaseKey(boss.id)]?.info?.per || (wclDifficulty === 5 ? phaseOverrides[boss.id]?.info?.per : null) || [];
     return starts.map((t, i) => {
       const lbl = phaseLabel(boss, i);
       const st = per[i];
@@ -1720,6 +1839,7 @@
           version: 3,
           tool,
           bossId,
+          wclDifficulty,
           duration,
           zoom,
           collapsedCats,
@@ -1737,6 +1857,7 @@
     if (!data || typeof data !== "object") return;
     if (data.tool === "board" || data.tool === "cd") tool = data.tool;
     if (data.bossId) bossId = data.bossId;
+    if (data.wclDifficulty === 4 || data.wclDifficulty === 5) wclDifficulty = data.wclDifficulty;
     const knownBosses = catalog()?.bosses || [];
     if (knownBosses.length && !knownBosses.some((b) => b.id === bossId)) {
       bossId = knownBosses[0].id;
@@ -1768,6 +1889,7 @@
     editRosterCap = 20;
     planPages = normalizePages(null);
     planPage = 0;
+    wclDifficulty = 5;
     hydratePage(blankPlanPage());
     wclPick = null;
     wclOpen = false;
@@ -1802,12 +1924,20 @@
     resetPlannerWorkspace();
     if (!logged) {
       await refreshSavedRaids();
+      const stored = readTempWorkspace()?.plan;
+      if (stored) applyTempWorkspace(stored);
       return;
     }
     const prefs = readPlannerPrefs(uid);
     applyPlannerPrefs(prefs);
     await refreshSavedRaids();
     const remembered = prefs?.activeRaidId;
+    if (remembered === TEMP_RAID_ID) {
+      applyTempWorkspace(readTempWorkspace()?.plan);
+      writePlannerPrefs();
+      tool = "cd";
+      return;
+    }
     const listed =
       (remembered && savedRaids.find((r) => r.id === remembered)) || savedRaids[0] || null;
     if (!listed) {
@@ -1835,7 +1965,8 @@
     persistTimer = setTimeout(() => {
       snapshotCurrentPage();
       writePlannerPrefs();
-      scheduleRaidPersist();
+      if (isTempRaid()) writeTempWorkspace();
+      else scheduleRaidPersist();
     }, 120);
   }
 
@@ -1873,6 +2004,7 @@
     return {
       version: 2,
       bossId,
+      wclDifficulty,
       zoom,
       collapsedCats,
       tool,
@@ -1882,7 +2014,7 @@
       localRoster: roster.map(slimMember),
       localBench: bench.map(slimMember),
       assignmentsByBoss: { ...assignmentsByBoss, [assignmentsBossId]: assignments },
-      boardsByBoss: { ...boardsByBoss, [boardBossId || bossId]: { steps, stepId, mapId: boardMapId } },
+      boardsByBoss: { ...boardsByBoss, [boardBossId || planSlotId()]: { steps, stepId, mapId: boardMapId } },
     };
   }
 
@@ -1899,6 +2031,8 @@
     if (data.bossId) bossId = data.bossId;
     const knownBosses = catalog()?.bosses || [];
     if (knownBosses.length && !knownBosses.some((b) => b.id === bossId)) bossId = knownBosses[0].id;
+    if (data.wclDifficulty === 4 || data.wclDifficulty === 5) wclDifficulty = data.wclDifficulty;
+    else wclDifficulty = 5;
     if (data.collapsedCats && typeof data.collapsedCats === "object") collapsedCats = data.collapsedCats;
     if (data.tool === "board" || data.tool === "cd") tool = data.tool;
     applyPagesFromPlan(data);
@@ -1940,7 +2074,7 @@
     return {
       version: 1,
       bossId,
-      boardsByBoss: { ...boardsByBoss, [boardBossId || bossId]: { steps, stepId, mapId: boardMapId } },
+      boardsByBoss: { ...boardsByBoss, [boardBossId || planSlotId()]: { steps, stepId, mapId: boardMapId } },
       roster: localRoster.map(slimMember),
       bench: localBench.map(slimMember),
     };
@@ -2101,7 +2235,7 @@
   function scheduleRaidPersist() {
     if (shareReadonly) return;
     if (rosterOpen && rosterDirty) return;
-    if (!activeRaidId || !global.RaidStore?.isLoggedIn() || raidBusy) return;
+    if (!isSavedRaidId(activeRaidId) || !global.RaidStore?.isLoggedIn() || raidBusy) return;
     clearTimeout(raidSaveTimer);
     raidSaveTimer = setTimeout(() => {
       if (raidBusy) return;
@@ -2121,7 +2255,12 @@
       opts?.name ||
       savedRaids.find((r) => r.id === (opts?.id || activeRaidId))?.name ||
       t("내 공대", "My raid");
-    const id = opts?.asNew ? undefined : opts?.id || activeRaidId || undefined;
+    const rawId = opts?.asNew ? undefined : opts?.id || activeRaidId || undefined;
+    const id = isSavedRaidId(rawId) ? rawId : undefined;
+    if (!id && !opts?.asNew && !empty) {
+      if (isTempRaid()) writeTempWorkspace();
+      return isTempRaid() ? { id: TEMP_RAID_ID, name: tempRaidLabel() } : null;
+    }
     raidBusy = true;
     try {
       const membersSrc = empty ? [] : Array.isArray(opts?.members) ? opts.members : localRoster;
@@ -2171,8 +2310,14 @@
 
   async function saveActiveRoster() {
     if (rosterOpen) commitRosterEdit();
+    if (isTempRaid()) {
+      writeTempWorkspace();
+      writePlannerPrefs();
+      if (rosterOpen) beginRosterEdit();
+      return true;
+    }
     if (!global.RaidStore?.isLoggedIn()) return true;
-    if (!activeRaidId) {
+    if (!isSavedRaidId(activeRaidId)) {
       const fallback = t(`내 공대 ${savedRaids.length + 1}`, `Raid ${savedRaids.length + 1}`);
       const name = window.prompt(t("공대 이름", "Raid name"), fallback);
       if (!name) {
@@ -2202,7 +2347,7 @@
     const name = window.prompt(t("새 공대 이름", "New raid name"), fallback);
     if (!name) return;
     if (!confirmDiscardRosterDraft()) return;
-    if (activeRaidId) await persistActiveRaid({ quiet: true, id: activeRaidId });
+    await persistCurrentIfSaved();
     const saved = await persistActiveRaid({ asNew: true, name: name.trim().slice(0, 80), empty: true });
     if (!saved) return;
     rosterOpen = true;
@@ -2230,7 +2375,7 @@
     const fallback = t(`${srcName} 복사`, `Copy of ${srcName}`);
     const name = window.prompt(t("복제된 공대 이름", "Duplicated raid name"), fallback);
     if (!name) return;
-    if (activeRaidId) await persistActiveRaid({ quiet: true, id: activeRaidId });
+    await persistCurrentIfSaved();
     const plan = currentPlanSnapshot({ active: members, bench });
     const saved = await persistActiveRaid({
       asNew: true,
@@ -2251,8 +2396,8 @@
       window.alert(t("로그인하면 공대 이름을 바꿀 수 있습니다.", "Log in to rename a raid."));
       return;
     }
-    if (!activeRaidId) {
-      window.alert(t("먼저 공대를 저장하세요.", "Save the raid first."));
+    if (!isSavedRaidId(activeRaidId)) {
+      window.alert(t("임시 공대는 이름을 바꿀 수 없습니다. 복제해서 새 공대로 만드세요.", "The temporary raid cannot be renamed. Duplicate it to save a named raid."));
       return;
     }
     const current = activeRaidName() || t("내 공대", "My raid");
@@ -2268,11 +2413,16 @@
 
   async function loadSavedRaid(id) {
     if (!id) return;
+    if (id === TEMP_RAID_ID) {
+      await switchToTempRaid();
+      return;
+    }
     if (!confirmDiscardRosterDraft()) {
       renderCd();
       return;
     }
-    if (activeRaidId && activeRaidId !== id && global.RaidStore?.isLoggedIn()) {
+    if (isTempRaid()) writeTempWorkspace();
+    else if (isSavedRaidId(activeRaidId) && activeRaidId !== id && global.RaidStore?.isLoggedIn()) {
       await persistActiveRaid({ quiet: true, id: activeRaidId });
     }
     const raid = await global.RaidStore.get(id);
@@ -2297,10 +2447,17 @@
     return savedRaids.find((r) => r.id === activeRaidId)?.name || "";
   }
 
+  function tempMemberCount() {
+    if (isTempRaid()) return localRoster.length;
+    const plan = readTempWorkspace()?.plan;
+    if (Array.isArray(plan?.localRoster) && plan.localRoster.length) return plan.localRoster.length;
+    return 0;
+  }
+
   function raidPickOptions() {
-    const temp = isTempRaid()
-      ? `<option value="${TEMP_RAID_ID}" selected>${escapeAttr(`${tempRaidLabel()} (${localRoster.length})`)}</option>`
-      : "";
+    const temp = `<option value="${TEMP_RAID_ID}" ${isTempRaid() ? "selected" : ""}>${escapeAttr(
+      `${tempRaidLabel()} (${tempMemberCount()})`
+    )}</option>`;
     const saved = savedRaids
       .map(
         (r) =>
@@ -2337,10 +2494,14 @@
         <button type="button" class="primary" data-rp="raid-save">${t("저장", "Save")}${rosterDirty ? " *" : ""}</button>
         <button type="button" class="ghost" data-rp="raid-save-new" ${logged ? "" : "disabled"}>${t("새로 만들기", "New raid")}</button>
         <button type="button" class="ghost" data-rp="raid-duplicate" ${logged ? "" : "disabled"}>${t("복제", "Duplicate")}</button>
-        <button type="button" class="ghost" data-rp="raid-rename" ${logged && activeRaidId ? "" : "disabled"}>${t("이름 편집", "Rename")}</button>
-        <button type="button" class="danger" data-rp="raid-delete" ${logged && activeRaidId ? "" : "disabled"}>${t("삭제", "Delete")}</button>
+        <button type="button" class="ghost" data-rp="raid-rename" ${logged && isSavedRaidId(activeRaidId) ? "" : "disabled"}>${t("이름 편집", "Rename")}</button>
+        <button type="button" class="danger" data-rp="raid-delete" ${logged && isSavedRaidId(activeRaidId) ? "" : "disabled"}>${t("삭제", "Delete")}</button>
       </div>
-      <div class="rp-raid-lib-note">${loginBit}</div>
+      <div class="rp-raid-lib-note">${loginBit}${
+        isTempRaid()
+          ? ` · ${t("구인 도우미용 임시 칸입니다. 저장한 공대는 덮어쓰지 않습니다.", "Helper scratch slot. Saved raids are not overwritten.")}`
+          : ""
+      }</div>
     </div>`;
   }
 
@@ -2421,6 +2582,7 @@
               <span id="rpBossLbl"></span>
               <strong id="rpBossName" class="rp-boss-name"></strong>
             </div>
+            <div class="rp-diff-toggle" id="rpDiff" role="group"></div>
             <div class="rp-boss-rail" id="rpBossPicker" role="listbox" aria-label="Boss"></div>
             <select id="rpBoss" class="rp-boss-select-fallback" aria-hidden="true" tabindex="-1"></select>
           </div>
@@ -2825,11 +2987,13 @@
     }
     if (act === "import-helper") {
       if (!rosterOpen) openRosterModal();
-      if (!importHelperRoster()) {
-        window.alert(t("구인 도우미에 전문화가 없습니다. 먼저 공대를 짜거나 데모 로스터를 쓰세요.", "Helper roster is empty. Build one first, or use the demo roster."));
-      }
-      render(true);
-      saveState();
+      enterTempFromHelper().then((ok) => {
+        if (!ok) {
+          window.alert(t("구인 도우미에 전문화가 없습니다. 먼저 공대를 짜거나 데모 로스터를 쓰세요.", "Helper roster is empty. Build one first, or use the demo roster."));
+        }
+        render(true);
+        saveState();
+      });
       return;
     }
     if (act === "demo-roster") {
@@ -2867,7 +3031,7 @@
       return;
     }
     if (act === "raid-delete") {
-      if (!activeRaidId) return;
+      if (!isSavedRaidId(activeRaidId)) return;
       const nm = activeRaidName() || t("이 공대", "this raid");
       if (!window.confirm(t(`"${nm}" 을(를) 삭제할까요? 쿨기·오더도 같이 지워집니다.`, `Delete "${nm}"? Cooldown plans and order boards will be removed.`))) return;
       const id = activeRaidId;
@@ -3017,6 +3181,10 @@
     }
     if (act === "plan-page") {
       setPlanPage(Number(btn.dataset.id));
+      return;
+    }
+    if (act === "diff-pick") {
+      setDifficulty(btn.dataset.d);
       return;
     }
     if (act === "boss-pick") {
@@ -3262,7 +3430,7 @@
     }
     if (e.target.dataset.rp === "raid-pick") {
       const id = e.target.value;
-      if (!id || id === TEMP_RAID_ID) return;
+      if (!id) return;
       loadSavedRaid(id);
       return;
     }
@@ -3712,6 +3880,14 @@
     if (bossNameEl) {
       const n = boss ? (langRef() === "ko" ? boss.nameKo || boss.name : boss.name) : "";
       bossNameEl.textContent = boss?.order ? `${boss.order}. ${n}` : n;
+    }
+
+    const diffEl = $("#rpDiff", root);
+    if (diffEl) {
+      diffEl.hidden = shareReadonly;
+      diffEl.innerHTML = `
+        <button type="button" class="${wclDifficulty === 4 ? "on" : ""}" data-rp="diff-pick" data-d="4">${t("영웅", "Heroic")}</button>
+        <button type="button" class="${wclDifficulty === 5 ? "on" : ""}" data-rp="diff-pick" data-d="5">${t("신화", "Mythic")}</button>`;
     }
 
     const picker = $("#rpBossPicker", root);
@@ -4242,7 +4418,7 @@
     const lo = (starts[idx - 1] || 0) + 1;
     const hi = starts[idx + 1] != null ? starts[idx + 1] - 1 : Math.max(sec, starts[idx]) + 600;
     starts[idx] = Math.max(lo, Math.min(hi, Math.round(sec)));
-    const prevInfo = phaseOverrides[bossId]?.info || null;
+    const prevInfo = phaseOverrides[phaseKey(bossId)]?.info || (wclDifficulty === 5 ? phaseOverrides[bossId]?.info : null) || null;
     setPhaseStarts(bossId, starts, "manual", prevInfo);
     render(true);
   }
@@ -4257,7 +4433,7 @@
       )}</span></div>`;
     }
     const starts = phaseStartsFor(boss);
-    const ov = phaseOverrides[boss.id];
+    const ov = phaseOverrides[phaseKey(boss.id)] || (wclDifficulty === 5 ? phaseOverrides[boss.id] : null);
     const encId = currentWclEncounterId();
     const inputs = starts
       .map((sec, i) => {
@@ -4389,7 +4565,7 @@
   }
 
   function wclPickKey(player) {
-    return `${bossId}|${currentWclEncounterId() || ""}|${player.class}|${player.spec}`;
+    return `${bossId}|${wclDifficulty}|${currentWclEncounterId() || ""}|${player.class}|${player.spec}`;
   }
 
   function openWclPick(player, rect) {
@@ -4641,7 +4817,7 @@
       .filter(Boolean)
       .sort((x, y) => x.ph - y.ph || x.rel - y.rel || x.tag.localeCompare(y.tag));
     const header = `EncounterID:${raw.wclEncounterId || 0};Difficulty:${
-      NSRT_DIFFICULTY[raw.wclDifficulty || 5] || "Mythic"
+      NSRT_DIFFICULTY[wclDifficulty] || "Mythic"
     };Name:${String(raw.name || raw.id).replace(/[;:]/g, "")};`;
     const body = rows.map((r) => `time:${r.rel};ph:${r.ph};tag:${r.tag};spellid:${r.spellId};`);
     return { text: [header, ...body].join("\n"), lines: body.length, unnamed: [...unnamed.values()] };
@@ -7177,16 +7353,23 @@
   }
 
   function importFromHelper() {
-    openRosterModal();
-    const ok = importHelperRoster();
-    if (!ok) {
-      discardRosterEdit();
-      rosterOpen = false;
-      return false;
-    }
-    render(true);
-    saveState();
-    return true;
+    return applyAuthWorkspace()
+      .then(() => enterTempFromHelper())
+      .then((ok) => {
+        if (!ok) {
+          window.alert(
+            t(
+              "구인 도우미에 전문화가 없습니다. 먼저 공대를 짜거나 데모 로스터를 쓰세요.",
+              "Helper roster is empty. Build one first, or use the demo roster."
+            )
+          );
+          return false;
+        }
+        openRosterModal();
+        render(true);
+        saveState();
+        return true;
+      });
   }
 
   function handleBack() {

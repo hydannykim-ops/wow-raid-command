@@ -963,7 +963,7 @@ function meleePlanAdvice(spec, nextCounts, target) {
   const roles = [];
   if (classHasRole(spec.class, "Tank") && nextCounts.Tank < target.Tank) roles.push("Tank");
   if (classHasRole(spec.class, "Heal") && nextCounts.Heal < target.Heal) roles.push("Heal");
-  if (canFillAsRanged(spec)) roles.push("Ranged");
+  if (canFillAsRanged(spec) && nextCounts.Ranged < target.Ranged) roles.push("Ranged");
   if (!roles.length) {
     return tx("근딜이 많습니다.", "Melee is already crowded.");
   }
@@ -1074,6 +1074,7 @@ function evaluateApplicant(spec) {
     nextCounts.Melee > meleeCap &&
     fillingCore &&
     canFillAsRanged(spec) &&
+    nextCounts.Ranged < target.Ranged &&
     !guaranteedMeleeSeat(spec)
   ) {
     const alt = altSpecName(spec.class, "Ranged");
