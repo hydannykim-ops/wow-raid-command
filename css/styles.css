@@ -959,10 +959,11 @@ body.rp-phase-dragging,body.rp-phase-dragging *{cursor:ew-resize!important;user-
 .rp-wcl-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-bottom:10px}
 .rp-wcl-controls label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:#8fa3b8;font-weight:700}
 .rp-wcl-controls select,.rp-wcl-controls input{min-width:160px;background:#0d141d;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 8px}
-.rp-wcl-warn,.rp-wcl-err{font-size:12px;padding:8px 10px;border-radius:8px;margin-bottom:8px}
+.rp-wcl-warn,.rp-wcl-err,.rp-wcl-ok{font-size:12px;padding:8px 10px;border-radius:8px;margin-bottom:8px}
 .rp-wcl-warn{background:#2a2212;color:var(--gold);border:1px solid #6a5420}
 .rp-wcl-err{background:#3d2028;color:#ff9aa0;border:1px solid #a94957}
-.rp-wcl-ok{font-size:12px;color:#68e2aa;margin-bottom:8px}
+.rp-wcl-ok{background:#1a2b22;color:#68e2aa;border:1px solid #2e6a4a}
+.rp-wcl-bar .rp-wcl-err,.rp-wcl-bar .rp-wcl-ok,.rp-wcl-bar .rp-wcl-warn{flex-basis:100%;margin:0}
 .rp-phase-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:10px;padding:8px 10px;border:1px solid #2a3b50;border-radius:10px;background:#0c121a}
 .rp-phase-bar>b,.rp-phase-title b{font-size:12px;color:var(--gold)}
 .rp-phase-bar.empty{padding:6px 10px}

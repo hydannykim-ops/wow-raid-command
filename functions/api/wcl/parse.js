@@ -43,9 +43,10 @@ export async function onRequestGet(context) {
   ]);
   const cached = await readWclCache(env, request, cacheKey);
   if (cached) return json(cached, 200, cacheHeaders(true));
+  const sourceClause = playerName ? ` and source.name = "${playerName.replace(/"/g, '\\"')}"` : "";
   const filterExpression = phasesOnly
     ? null
-    : `type = "cast" and ability.id in (${abilityIds.join(",")})`;
+    : `type = "cast" and ability.id in (${abilityIds.join(",")})${sourceClause}`;
 
   const query = phasesOnly
     ? `
@@ -71,7 +72,7 @@ export async function onRequestGet(context) {
     }
   `
     : `
-    query ParseCasts($code: String!, $fightId: Int!, $filter: String) {
+    query ParseCasts($code: String!, $fightId: Int!, $filter: String, $start: Float, $end: Float) {
       reportData {
         report(code: $code) {
           code
@@ -99,6 +100,8 @@ export async function onRequestGet(context) {
             fightIDs: [$fightId]
             dataType: Casts
             filterExpression: $filter
+            startTime: $start
+            endTime: $end
             limit: 10000
           ) {
             data
@@ -114,31 +117,66 @@ export async function onRequestGet(context) {
     let nextPage = null;
     let fight = null;
     let title = null;
+    let truncated = false;
 
-    // 첫 페이지
+    const fightQuery = `
+      query ParseFight($code: String!, $fightId: Int!) {
+        reportData {
+          report(code: $code) {
+            code
+            title
+            masterData {
+              actors(type: "Player") {
+                id
+                name
+                server
+              }
+            }
+            fights(fightIDs: [$fightId]) {
+              id
+              name
+              encounterID
+              startTime
+              endTime
+              kill
+              phaseTransitions {
+                id
+                startTime
+              }
+            }
+          }
+        }
+      }
+    `;
     let data = await wclGraphql(
       env,
-      query,
-      phasesOnly
-        ? { code: reportCode, fightId }
-        : { code: reportCode, fightId, filter: filterExpression }
+      phasesOnly ? query : fightQuery,
+      { code: reportCode, fightId }
     );
     const report = data?.reportData?.report;
     title = report?.title || null;
     fight = (report?.fights || [])[0] || null;
 
-    if (!phasesOnly) {
-      const first = report?.events;
+    if (!phasesOnly && fight) {
+      const fightStartMs = Number(fight.startTime) || 0;
+      const fightEndMs = Number(fight.endTime) || fightStartMs;
+      data = await wclGraphql(env, query, {
+        code: reportCode,
+        fightId,
+        filter: filterExpression,
+        start: fightStartMs,
+        end: fightEndMs,
+      });
+      const first = data?.reportData?.report?.events;
       const chunk = typeof first?.data === "string" ? JSON.parse(first.data) : first?.data || [];
       allEvents = allEvents.concat(chunk);
       nextPage = first?.nextPageTimestamp ?? null;
 
-      // 페이지네이션 (최대 5페이지)
       let pages = 0;
-      while (nextPage != null && pages < 5) {
+      while (nextPage != null && nextPage !== 0 && nextPage < fightEndMs && pages < 20) {
         pages += 1;
         const pageQuery = `
-          query More($code: String!, $fightId: Int!, $filter: String, $start: Float) {
+          query More($code: String!, $fightId: Int!, $filter: String, $start: Float, $end: Float) {
             reportData {
               report(code: $code) {
                 events(
@@ -146,6 +184,7 @@ export async function onRequestGet(context) {
                   dataType: Casts
                   filterExpression: $filter
                   startTime: $start
+                  endTime: $end
                   limit: 10000
                 ) {
                   data
@@ -160,12 +199,14 @@ export async function onRequestGet(context) {
           fightId,
           filter: filterExpression,
           start: nextPage,
+          end: fightEndMs,
         });
         const ev = more?.reportData?.report?.events;
         const part = typeof ev?.data === "string" ? JSON.parse(ev.data) : ev?.data || [];
         allEvents = allEvents.concat(part);
         nextPage = ev?.nextPageTimestamp ?? null;
       }
+      truncated = nextPage != null && nextPage !== 0 && nextPage < fightEndMs;
     }
 
     if (!fight) {
@@ -239,12 +280,17 @@ export async function onRequestGet(context) {
       phases,
       source,
       casts,
+      truncated,
       logUrl: `https://www.warcraftlogs.com/reports/${reportCode}#fight=${fightId}`,
       cached: false,
     };
-    await writeWclCache(env, cacheKey, "parse", payload);
+    if (!truncated) await writeWclCache(env, cacheKey, "parse", payload);
     return json(payload, 200, cacheHeaders(false));
   } catch (err) {
-    return json({ ok: false, configured: true, error: String(err.message || err) }, 502);
+    const raw = String(err.message || err);
+    const error = /429|rate limit|too many points|throttl/i.test(raw)
+      ? "WCL 요청 한도에 걸렸습니다. 잠시 후 다시 눌러 주세요."
+      : raw;
+    return json({ ok: false, configured: true, error }, 502);
   }
 }

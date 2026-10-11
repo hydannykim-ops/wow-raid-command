@@ -31,7 +31,12 @@ async function getToken(env) {
   return cachedToken;
 }
 
-export async function wclGraphql(env, query, variables = {}) {
+function isRateLimit(err, status, body) {
+  const msg = `${status || ""} ${err?.message || ""} ${JSON.stringify(body?.errors || body || "")}`;
+  return status === 429 || /rate limit|too many points|points? exceeded|throttl/i.test(msg);
+}
+
+async function wclGraphqlOnce(env, query, variables) {
   const token = await getToken(env);
   const res = await fetch("https://www.warcraftlogs.com/api/v2/client", {
     method: "POST",
@@ -43,10 +48,29 @@ export async function wclGraphql(env, query, variables = {}) {
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(`wcl graphql ${res.status}: ${JSON.stringify(body)}`);
+    const err = new Error(`wcl graphql ${res.status}: ${JSON.stringify(body)}`);
+    err.status = res.status;
+    err.body = body;
+    throw err;
   }
   if (body.errors?.length) {
-    throw new Error(body.errors.map((e) => e.message).join("; "));
+    const err = new Error(body.errors.map((e) => e.message).join("; "));
+    err.body = body;
+    throw err;
   }
   return body.data;
+}
+
+export async function wclGraphql(env, query, variables = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      return await wclGraphqlOnce(env, query, variables);
+    } catch (err) {
+      lastErr = err;
+      if (!isRateLimit(err, err.status, err.body) || attempt === 3) throw err;
+      await new Promise((r) => setTimeout(r, 700 * (attempt + 1) * (attempt + 1)));
+    }
+  }
+  throw lastErr;
 }

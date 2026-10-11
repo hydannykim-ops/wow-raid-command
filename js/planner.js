@@ -298,6 +298,8 @@
   /** 전체 자동 반영 진행 상황 { done, total, current[], results[] } */
   let wclBulk = null;
   let wclStatus = "";
+  /** ok | warn — wclStatus 배너 색 */
+  let wclStatusKind = "ok";
   /** bossId → { phases, sampleCount, topCount, bottomCount } */
   let wclPhaseByBoss = {};
   /** 캐릭터 옆 WCL 버튼 팝오버 { playerId, bossId, key, x, y, loading, phasesLoading, error, status, applying } */
@@ -4235,6 +4237,11 @@
   }
 
   function renderWclPanel() {
+    const note = wclError
+      ? `<div class="rp-wcl-err" role="status">${escapeAttr(wclError)}</div>`
+      : wclStatus
+        ? `<div class="${wclStatusKind === "warn" ? "rp-wcl-warn" : "rp-wcl-ok"}" role="status">${escapeAttr(wclStatus)}</div>`
+        : "";
     return `<div class="rp-wcl-bar">
       <div class="rp-wcl-assign-act">
         <button type="button" class="primary" data-rp="wcl-apply-all" ${wclLoading ? "disabled" : ""}>${
@@ -4244,7 +4251,7 @@
         }</button>
         ${wclAutoAssignHelp()}
       </div>
-      ${wclError ? `<div class="rp-wcl-err">${escapeAttr(wclError)}</div>` : ""}
+      ${note}
     </div>`;
   }
 
@@ -4301,7 +4308,7 @@
       }
       lastBySpell.set(sp.id, { raw: c.tSec, mapped });
       const tSec = Math.max(0, Math.round(mapped));
-      const ph = seg ? seg.k : phaseSegmentFor(forBossId, tSec);
+      const ph = phaseSegmentFor(forBossId, tSec);
       const ev = nearestEventForTime(tSec, events);
       targets.forEach((player) => {
         list.push({
@@ -4329,13 +4336,16 @@
    */
   async function pickPhasedLog(rankings, abilityIds, forBossId) {
     const need = basePhases(catalogBoss(forBossId)).length;
-    const cands = (rankings || []).filter(
+    let cands = (rankings || []).filter(
       (r) => r.reportCode && r.fightId != null && r.name && r.name !== "Anonymous"
     );
+    const long = cands.filter((r) => (Number(r.durationSec) || 0) >= 150);
+    if (long.length) cands = long;
+    cands.sort((a, b) => (Number(b.durationSec) || 0) - (Number(a.durationSec) || 0) || (a.rank || 0) - (b.rank || 0));
     if (!cands.length) throw new Error(t("랭킹 없음", "No rankings"));
     let best = null;
     let skipped = 0;
-    for (const entry of cands.slice(0, need ? 6 : 1)) {
+    for (const entry of cands.slice(0, need ? 4 : 1)) {
       const parsed = await global.WclClient.fetchParse({
         reportCode: entry.reportCode,
         fightId: entry.fightId,
@@ -4509,12 +4519,14 @@
     const encounterId = currentWclEncounterId();
     if (!encounterId) {
       wclError = t("WCL Encounter ID가 필요합니다.", "WCL Encounter ID required.");
+      wclStatus = "";
       renderCd();
       return;
     }
     const groups = rosterSpecGroups();
     if (!groups.length) {
-      wclError = t("로스터에 쿨기가 있는 공대원이 없습니다.", "No roster members with mapped cooldowns.");
+      wclError = t("로스터에 쿨기가 있는 공대원이 없습니다. 공대 구성에서 멤버를 넣어 주세요.", "No roster members with mapped cooldowns.");
+      wclStatus = "";
       renderCd();
       return;
     }
@@ -4522,51 +4534,81 @@
     const runBossId = bossId;
     wclLoading = true;
     wclError = null;
+    wclStatus = "";
+    wclStatusKind = "ok";
     wclBulk = { done: 0, total: groups.length, current: [], results: [] };
-    wclStatus = "";
     renderCd();
-    await global.WclClient.mapPool(groups, 3, async (g) => {
-      wclBulk.current.push(g.label);
-      renderCd();
-      const result = { label: g.label, ok: false, name: "", placed: 0, error: "" };
-      try {
-        const data = await global.WclClient.fetchRankings({
-          encounterId,
-          className: wclName(g.className),
-          specName: wclName(g.specName),
-          metric: g.role === "Heal" ? "hps" : "dps",
-          difficulty,
-          pageSize: 10,
-          page: 1,
-        });
-        if (!data.ok) throw new Error(data.error || "rankings failed");
-        const picked = await pickPhasedLog(data.rankings || [], g.abilityIds, runBossId);
-        result.placed = applyWclCasts(picked.parsed, g.abilityIds, g.targets, runBossId);
-        result.name = picked.entry.name;
-        result.rank = picked.entry.rank;
-        result.phased = picked.phased;
-        result.skipped = picked.skipped;
-        result.ok = true;
-      } catch (err) {
-        result.error = err?.data?.error || err.message || String(err);
+    try {
+      await global.WclClient.mapPool(groups, 2, async (g) => {
+        wclBulk.current.push(g.label);
+        renderCd();
+        const result = { label: g.label, ok: false, name: "", placed: 0, error: "" };
+        try {
+          const data = await global.WclClient.fetchRankings({
+            encounterId,
+            className: wclName(g.className),
+            specName: wclName(g.specName),
+            metric: g.role === "Heal" ? "hps" : "dps",
+            difficulty,
+            pageSize: 10,
+            page: 1,
+          });
+          if (!data.ok) throw new Error(data.error || "rankings failed");
+          const picked = await pickPhasedLog(data.rankings || [], g.abilityIds, runBossId);
+          result.placed = applyWclCasts(picked.parsed, g.abilityIds, g.targets, runBossId);
+          result.name = picked.entry.name;
+          result.rank = picked.entry.rank;
+          result.phased = picked.phased;
+          result.skipped = picked.skipped;
+          result.ok = true;
+        } catch (err) {
+          result.error = err?.data?.error || err.message || String(err);
+        }
+        wclBulk.results.push(result);
+        wclBulk.done += 1;
+        wclBulk.current = wclBulk.current.filter((x) => x !== g.label);
+        renderCd();
+      });
+      const results = wclBulk.results;
+      const ok = results.filter((r) => r.ok && r.placed > 0);
+      const empty = results.filter((r) => r.ok && !(r.placed > 0));
+      const bad = results.filter((r) => !r.ok);
+      const failNames = [...bad, ...empty].map((r) => r.label);
+      const failHint = failNames.length
+        ? t(` · ${failNames.slice(0, 4).join(", ")}${failNames.length > 4 ? " 외" : ""}`, ` · ${failNames.slice(0, 4).join(", ")}${failNames.length > 4 ? "…" : ""}`)
+        : "";
+      if (!ok.length) {
+        const reason = bad[0]?.error
+          || (empty.length
+            ? t("로그에서 배정할 쿨기를 찾지 못했습니다.", "No matching cooldowns in the logs.")
+            : t("로그를 불러오지 못했습니다.", "Could not load logs."));
+        wclError = t(`생존기 자동배정 실패${failHint} · ${reason}`, `Auto-assign failed${failHint} · ${reason}`);
+        wclStatus = "";
+      } else if (bad.length || empty.length) {
+        wclError = null;
+        wclStatusKind = "warn";
+        wclStatus = t(
+          `생존기 자동배정 일부 완료 (${ok.length}/${results.length})${failHint}`,
+          `Auto-assign partial (${ok.length}/${results.length})${failHint}`
+        );
+      } else {
+        wclError = null;
+        wclStatusKind = "ok";
+        wclStatus = t(`생존기 자동배정 완료 · ${ok.length}개 전문화`, `Auto-assign done · ${ok.length} specs`);
       }
-      wclBulk.results.push(result);
-      wclBulk.done += 1;
-      wclBulk.current = wclBulk.current.filter((x) => x !== g.label);
+    } catch (err) {
+      wclError = t(
+        `생존기 자동배정 실패 · ${err?.message || err || "알 수 없는 오류"}`,
+        `Auto-assign failed · ${err?.message || err || "unknown error"}`
+      );
+      wclStatus = "";
+    } finally {
+      wclLoading = false;
+      wclOpen = false;
+      wclBulk = null;
+      saveState();
       renderCd();
-    });
-    const okN = wclBulk.results.filter((r) => r.ok).length;
-    wclLoading = false;
-    wclOpen = false;
-    wclBulk = null;
-    wclStatus = "";
-    if (!okN) {
-      wclError = t("생존기 자동배정에 실패했습니다.", "Auto-assign failed.");
-    } else {
-      wclError = null;
     }
-    saveState();
-    renderCd();
   }
 
   function wclPickKey(player) {
