@@ -4263,12 +4263,13 @@
     const events = planGridSkillEvents(boss);
     const spellIdsToClear = new Set(abilityIds.map((n) => spellByNumericId(n)?.id).filter(Boolean));
     const targetIds = new Set(targets.map((m) => m.playerId));
-    const isCurrent = forBossId === assignmentsBossId;
-    const list = (isCurrent ? assignments : assignmentsByBoss[forBossId] || []).filter(
+    const slot = planSlotId(forBossId);
+    const isCurrent = slot === assignmentsBossId;
+    const list = (isCurrent ? assignments : assignmentsByBoss[slot] || []).filter(
       (a) => !(targetIds.has(a.playerId) && spellIdsToClear.has(a.spellId))
     );
     if (isCurrent) assignments = list;
-    else assignmentsByBoss[forBossId] = list;
+    else assignmentsByBoss[slot] = list;
     let placed = 0;
     // 로그 전환 k 와 플래너 전환 k 를 맞춰 구간 상대 시각으로 이동. 전환 기록이 없으면 전투 시각 그대로
     const rawB = catalogBoss(forBossId);
