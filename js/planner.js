@@ -4345,14 +4345,23 @@
     if (!cands.length) throw new Error(t("랭킹 없음", "No rankings"));
     let best = null;
     let skipped = 0;
-    for (const entry of cands.slice(0, need ? 4 : 1)) {
-      const parsed = await global.WclClient.fetchParse({
-        reportCode: entry.reportCode,
-        fightId: entry.fightId,
-        abilityIds,
-        playerName: entry.name,
-      });
-      if (!parsed.ok) {
+    let lastErr = "";
+    for (const entry of cands.slice(0, need ? 2 : 1)) {
+      let parsed;
+      try {
+        parsed = await global.WclClient.fetchParse({
+          reportCode: entry.reportCode,
+          fightId: entry.fightId,
+          abilityIds,
+          playerName: entry.name,
+        });
+      } catch (err) {
+        lastErr = err?.data?.error || err.message || String(err);
+        skipped += 1;
+        continue;
+      }
+      if (!parsed?.ok) {
+        lastErr = parsed?.error || lastErr;
         skipped += 1;
         continue;
       }
@@ -4361,7 +4370,7 @@
       if (!best || n > best.n) best = { entry, parsed, n };
       skipped += 1;
     }
-    if (!best) throw new Error(t("로그를 불러오지 못했습니다.", "Failed to load logs."));
+    if (!best) throw new Error(lastErr || t("로그를 불러오지 못했습니다.", "Failed to load logs."));
     return { entry: best.entry, parsed: best.parsed, phased: best.n > 0, skipped };
   }
 

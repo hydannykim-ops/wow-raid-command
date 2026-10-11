@@ -43,10 +43,9 @@ export async function onRequestGet(context) {
   ]);
   const cached = await readWclCache(env, request, cacheKey);
   if (cached) return json(cached, 200, cacheHeaders(true));
-  const sourceClause = playerName ? ` and source.name = "${playerName.replace(/"/g, '\\"')}"` : "";
   const filterExpression = phasesOnly
     ? null
-    : `type = "cast" and ability.id in (${abilityIds.join(",")})${sourceClause}`;
+    : `type = "cast" and ability.id in (${abilityIds.join(",")})`;
 
   const query = phasesOnly
     ? `
@@ -72,7 +71,7 @@ export async function onRequestGet(context) {
     }
   `
     : `
-    query ParseCasts($code: String!, $fightId: Int!, $filter: String, $start: Float, $end: Float) {
+    query ParseCasts($code: String!, $fightId: Int!, $filter: String) {
       reportData {
         report(code: $code) {
           code
@@ -100,8 +99,6 @@ export async function onRequestGet(context) {
             fightIDs: [$fightId]
             dataType: Casts
             filterExpression: $filter
-            startTime: $start
-            endTime: $end
             limit: 10000
           ) {
             data
@@ -119,64 +116,26 @@ export async function onRequestGet(context) {
     let title = null;
     let truncated = false;
 
-    const fightQuery = `
-      query ParseFight($code: String!, $fightId: Int!) {
-        reportData {
-          report(code: $code) {
-            code
-            title
-            masterData {
-              actors(type: "Player") {
-                id
-                name
-                server
-              }
-            }
-            fights(fightIDs: [$fightId]) {
-              id
-              name
-              encounterID
-              startTime
-              endTime
-              kill
-              phaseTransitions {
-                id
-                startTime
-              }
-            }
-          }
-        }
-      }
-    `;
     let data = await wclGraphql(
       env,
-      phasesOnly ? query : fightQuery,
-      { code: reportCode, fightId }
+      query,
+      phasesOnly ? { code: reportCode, fightId } : { code: reportCode, fightId, filter: filterExpression }
     );
     const report = data?.reportData?.report;
     title = report?.title || null;
     fight = (report?.fights || [])[0] || null;
 
-    if (!phasesOnly && fight) {
-      const fightStartMs = Number(fight.startTime) || 0;
-      const fightEndMs = Number(fight.endTime) || fightStartMs;
-      data = await wclGraphql(env, query, {
-        code: reportCode,
-        fightId,
-        filter: filterExpression,
-        start: fightStartMs,
-        end: fightEndMs,
-      });
-      const first = data?.reportData?.report?.events;
+    if (!phasesOnly) {
+      const first = report?.events;
       const chunk = typeof first?.data === "string" ? JSON.parse(first.data) : first?.data || [];
       allEvents = allEvents.concat(chunk);
       nextPage = first?.nextPageTimestamp ?? null;
-
+      const fightEndMs = Number(fight?.endTime) || Infinity;
       let pages = 0;
-      while (nextPage != null && nextPage !== 0 && nextPage < fightEndMs && pages < 20) {
+      while (nextPage != null && nextPage !== 0 && nextPage < fightEndMs && pages < 8) {
         pages += 1;
         const pageQuery = `
-          query More($code: String!, $fightId: Int!, $filter: String, $start: Float, $end: Float) {
+          query More($code: String!, $fightId: Int!, $filter: String, $start: Float) {
             reportData {
               report(code: $code) {
                 events(
@@ -184,7 +143,6 @@ export async function onRequestGet(context) {
                   dataType: Casts
                   filterExpression: $filter
                   startTime: $start
-                  endTime: $end
                   limit: 10000
                 ) {
                   data
@@ -199,7 +157,6 @@ export async function onRequestGet(context) {
           fightId,
           filter: filterExpression,
           start: nextPage,
-          end: fightEndMs,
         });
         const ev = more?.reportData?.report?.events;
         const part = typeof ev?.data === "string" ? JSON.parse(ev.data) : ev?.data || [];

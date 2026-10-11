@@ -62,15 +62,11 @@ async function wclGraphqlOnce(env, query, variables) {
 }
 
 export async function wclGraphql(env, query, variables = {}) {
-  let lastErr;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    try {
-      return await wclGraphqlOnce(env, query, variables);
-    } catch (err) {
-      lastErr = err;
-      if (!isRateLimit(err, err.status, err.body) || attempt === 3) throw err;
-      await new Promise((r) => setTimeout(r, 700 * (attempt + 1) * (attempt + 1)));
-    }
+  try {
+    return await wclGraphqlOnce(env, query, variables);
+  } catch (err) {
+    if (!isRateLimit(err, err.status, err.body)) throw err;
+    await new Promise((r) => setTimeout(r, 400));
+    return await wclGraphqlOnce(env, query, variables);
   }
-  throw lastErr;
 }
