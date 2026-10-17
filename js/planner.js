@@ -4832,16 +4832,92 @@
   };
 
   /**
+   * NSRT 가 인게임에서 실제로 올리는 Phase 값.
+   * 우리 플래너 구간(WCL 전환을 전부 1,2,3,4,5로 나눈 것)과 다름.
+   * 교차검증: NSRT BossTimelines + DetectPhaseChange / Viserio Phase Change 태그 (2026-10).
+   *   pull     = 전투 내내 Phase=1, time 은 풀 기준 초
+   *   our:N    = 우리 전환선 N의 시각을 그 NSRT ph 시작으로 씀
+   *   offset   = our 시각에 더할 초 (네크잘리 1.75처럼 우리 바에 없는 중간 페이즈)
+   */
+  const NSRT_PHASE_MAP = {
+    sszorak: "pull",
+    vashnik: "pull",
+    "twin-fangs": "pull",
+    ulatek: "pull",
+    nekzali: [
+      { ph: 1, start: 0 },
+      { ph: 1.5, our: 0 },
+      { ph: 1.75, our: 0, offset: 85 },
+      { ph: 2, our: 0, offset: 170 },
+    ],
+    "entombed-sentinels": [
+      { ph: 1, start: 0 },
+      { ph: 2, our: 1 },
+      { ph: 3, our: 3 },
+      { ph: 4, our: 5 },
+      { ph: 5, our: 7 },
+    ],
+    "lost-explorers": [
+      { ph: 1, start: 0 },
+      { ph: 2, our: 0 },
+      { ph: 3, our: 2 },
+      { ph: 4, our: 4 },
+      { ph: 5, our: 6 },
+    ],
+    "coiled-altar": [
+      { ph: 1, start: 0 },
+      { ph: 2, our: 0 },
+      { ph: 2.5, our: 1 },
+      { ph: 3, our: 2 },
+    ],
+  };
+
+  function nsrtPhasesFor(boss) {
+    const spec = NSRT_PHASE_MAP[boss?.id];
+    if (spec === "pull") return [{ ph: 1, start: 0 }];
+    const ours = basePhases(boss).length ? phaseStartsFor(boss) : [];
+    if (!Array.isArray(spec)) {
+      return [{ ph: 1, start: 0 }, ...ours.map((s, i) => ({ ph: i + 2, start: s }))];
+    }
+    const out = [];
+    spec.forEach((row) => {
+      let start = Number(row.start);
+      if (Number.isInteger(row.our)) {
+        if (ours[row.our] == null) return;
+        start = Number(ours[row.our]) + (Number(row.offset) || 0);
+      }
+      if (!Number.isFinite(start)) return;
+      out.push({ ph: row.ph, start: Math.max(0, Math.round(start)) });
+    });
+    out.sort((a, b) => a.start - b.start || a.ph - b.ph);
+    const clean = [];
+    out.forEach((p) => {
+      if (clean.length && p.start <= clean[clean.length - 1].start) return;
+      clean.push(p);
+    });
+    return clean.length ? clean : [{ ph: 1, start: 0 }];
+  }
+
+  function nsrtSlot(sec, phases) {
+    const list = phases && phases.length ? phases : [{ ph: 1, start: 0 }];
+    let hit = list[0];
+    for (let i = 0; i < list.length; i++) {
+      if (sec >= list[i].start) hit = list[i];
+    }
+    return { ph: hit.ph, rel: Math.max(0, Math.round(sec - hit.start)) };
+  }
+
+  /**
    * Northern Sky Raid Tools 리마인더 노트
    *   EncounterID:3470;Difficulty:Mythic;Name:...;
-   *   time:20;ph:2;tag:캐릭터;spellid:740;
-   * ph 는 전환마다 1씩 늘어나는 순번(1→2→1 도 ph:1,2,3), time 은 그 페이즈 시작 기준 초.
+   *   time:20;ph:1.5;tag:캐릭터;spellid:740;
+   * ph / time 은 NSRT 인게임 Phase. 스조라크처럼 1페이즈 넴은 전부 ph:1 + 풀 기준 초.
    * 페이즈 시간차로 못 쓰는(회색) 배치는 제외
    */
   function buildNsrtNote() {
     const raw = catalogBoss(bossId);
     if (!raw) return { text: "", lines: 0, unnamed: [] };
-    const starts = basePhases(raw).length ? phaseStartsFor(raw) : [];
+    const nsrtPhases = nsrtPhasesFor(raw);
     const hidden = hiddenAssignTest(bossId);
     const unnamed = new Map();
     const specCount = new Map();
@@ -4867,9 +4943,8 @@
         const player = activeRoster().find((m) => m.playerId === a.playerId);
         if (!sp || !player || !(Number(sp.spellId) > 0)) return null;
         const sec = Number(a.t) || 0;
-        const k = Number.isInteger(a.ph) && a.ph < starts.length ? a.ph : segmentOf(sec, starts);
-        const rel = Math.max(0, Math.round(k < 0 ? sec : sec - starts[k]));
-        return { ph: k + 2, rel, tag: tagFor(player), spellId: sp.spellId };
+        const slot = nsrtSlot(sec, nsrtPhases);
+        return { ph: slot.ph, rel: slot.rel, tag: tagFor(player), spellId: sp.spellId };
       })
       .filter(Boolean)
       .sort((x, y) => x.ph - y.ph || x.rel - y.rel || x.tag.localeCompare(y.tag));
@@ -4924,7 +4999,7 @@
       <div class="rp-wcl-pop-h">
         <div class="rp-wcl-pop-title"><b>${t("NSRT 리마인더 내보내기", "Export NSRT reminders")}</b><span>${escapeAttr(
           bossName || ""
-        )} · ${t("페이즈 기준 시각", "phase-relative time")}</span></div>
+        )} · ${t("NSRT 페이즈 기준 (1페이즈 넴은 풀 시각)", "NSRT phase time (single-phase bosses use pull time)")}</span></div>
         <button type="button" class="ghost rp-wcl-pop-x" data-rp="nsrt-close" title="${t("닫기", "Close")}">✕</button>
       </div>
       ${copiedNote}
