@@ -4580,31 +4580,28 @@
         renderCd();
       });
       const results = wclBulk.results;
-      const ok = results.filter((r) => r.ok && r.placed > 0);
-      const empty = results.filter((r) => r.ok && !(r.placed > 0));
+      // 로그는 읽었는데 그 전문화가 생존기를 안 쓴 경우(placed 0)는 실패가 아니다.
+      const done = results.filter((r) => r.ok);
       const bad = results.filter((r) => !r.ok);
-      const failNames = [...bad, ...empty].map((r) => r.label);
+      const failNames = bad.map((r) => r.label);
       const failHint = failNames.length
         ? t(` · ${failNames.slice(0, 4).join(", ")}${failNames.length > 4 ? " 외" : ""}`, ` · ${failNames.slice(0, 4).join(", ")}${failNames.length > 4 ? "…" : ""}`)
         : "";
-      if (!ok.length) {
-        const reason = bad[0]?.error
-          || (empty.length
-            ? t("로그에서 배정할 쿨기를 찾지 못했습니다.", "No matching cooldowns in the logs.")
-            : t("로그를 불러오지 못했습니다.", "Could not load logs."));
+      if (!done.length) {
+        const reason = bad[0]?.error || t("로그를 불러오지 못했습니다.", "Could not load logs.");
         wclError = t(`생존기 자동배정 실패${failHint} · ${reason}`, `Auto-assign failed${failHint} · ${reason}`);
         wclStatus = "";
-      } else if (bad.length || empty.length) {
+      } else if (bad.length) {
         wclError = null;
         wclStatusKind = "warn";
         wclStatus = t(
-          `생존기 자동배정 일부 완료 (${ok.length}/${results.length})${failHint}`,
-          `Auto-assign partial (${ok.length}/${results.length})${failHint}`
+          `생존기 자동배정 일부 완료 (${done.length}/${results.length})${failHint}`,
+          `Auto-assign partial (${done.length}/${results.length})${failHint}`
         );
       } else {
         wclError = null;
         wclStatusKind = "ok";
-        wclStatus = t(`생존기 자동배정 완료 · ${ok.length}개 전문화`, `Auto-assign done · ${ok.length} specs`);
+        wclStatus = t(`생존기 자동배정 완료 · ${done.length}개 전문화`, `Auto-assign done · ${done.length} specs`);
       }
     } catch (err) {
       wclError = t(
