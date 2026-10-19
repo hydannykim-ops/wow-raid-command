@@ -308,6 +308,8 @@
   const wclPickCache = {};
   /** NSRT 내보내기 창 { copied: true|false|null } */
   let nsrtModal = null;
+  /** 생존기 자동배정 확인 팝업 */
+  let wclAssignAsk = false;
 
   /** 페이즈 전환 시각 조정: bossId → { starts: [sec…], source: "wcl"|"manual", info } */
   const PHASE_KEY = "rp-phase-overrides";
@@ -3335,16 +3337,21 @@
       applyWclPick(Number(btn.dataset.rank) || 1);
       return;
     }
+    if (act === "wcl-assign-cancel") {
+      wclAssignAsk = false;
+      renderCd();
+      return;
+    }
+    if (act === "wcl-assign-go") {
+      if (wclLoading) return;
+      wclAssignAsk = false;
+      wclApplyAllTop();
+      return;
+    }
     if (act === "wcl-apply-all") {
       if (wclLoading) return;
-      const ok = window.confirm(
-        t(
-          "공대원들의 생존기를 랭킹 1등의 타이밍으로 일괄 교체할까요? 이 보스에 올려 둔 생존기 배정은 그 시각으로 바뀝니다.",
-          "Replace every raider's defensives with rank 1 timings? Assignments already on this boss will be overwritten."
-        )
-      );
-      if (!ok) return;
-      wclApplyAllTop();
+      wclAssignAsk = true;
+      renderCd();
       return;
     }
     if (act === "phase-sync") {
@@ -3571,6 +3578,12 @@
 
     if (tool === "cd") {
       if (e.key === "Escape") {
+        if (wclAssignAsk) {
+          e.preventDefault();
+          wclAssignAsk = false;
+          renderCd();
+          return;
+        }
         if (rosterOpen) {
           e.preventDefault();
           if (rosterClosePrompt) {
@@ -4241,6 +4254,26 @@
       const repeats = base.filter((_, j) => phaseLabel(rawB, j).ko === lbl.ko).length > 1;
       return repeats ? { ko: `${lbl.ko}(${n}회차)`, en: `${lbl.en} (#${n})` } : lbl;
     });
+  }
+
+  function renderWclAssignAsk() {
+    if (!wclAssignAsk) return "";
+    return `<div class="rp-modal-back" data-rp="wcl-assign-cancel"></div>
+    <div class="rp-assign-ask" role="alertdialog" aria-modal="true" aria-labelledby="rpAssignAskTitle">
+      <b id="rpAssignAskTitle">${t("생존기 자동배정", "Auto-assign CDs")}</b>
+      <p>${t(
+        "공대원들의 생존기를 랭킹 1등의 타이밍으로 일괄 교체할까요?",
+        "Replace every raider's defensives with rank 1 timings?"
+      )}</p>
+      <p class="sub">${t(
+        "이 보스에 올려 둔 생존기 배정은 그 시각으로 바뀝니다.",
+        "Assignments already on this boss will be overwritten."
+      )}</p>
+      <div class="rp-assign-ask-acts">
+        <button type="button" class="ghost" data-rp="wcl-assign-cancel">${t("취소", "Cancel")}</button>
+        <button type="button" class="primary" data-rp="wcl-assign-go">${t("교체하기", "Replace")}</button>
+      </div>
+    </div>`;
   }
 
   function renderWclPanel() {
@@ -5094,7 +5127,8 @@
         </section>
       </div>
       ${renderWclPick()}
-      ${renderNsrtModal()}`;
+      ${renderNsrtModal()}
+      ${renderWclAssignAsk()}`;
 
     keepScroll.forEach((s) => {
       const el = s && box.querySelector(s.sel);
@@ -5112,6 +5146,7 @@
       filterPop.style.top = `${Math.round(bb.bottom - hb.top + 4)}px`;
       filterPop.style.left = `${Math.max(4, Math.round(bb.left - hb.left - 4))}px`;
     }
+    if (wclAssignAsk) box.querySelector(".rp-assign-ask [data-rp='wcl-assign-cancel']")?.focus();
     if (rosterEditId) {
       const input = box.querySelector(`input[data-rp="edit-nick"][data-id="${rosterEditId}"]`);
       if (input) {

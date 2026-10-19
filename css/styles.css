@@ -1026,6 +1026,12 @@ body.rp-phase-dragging,body.rp-phase-dragging *{cursor:ew-resize!important;user-
 .rp-wcl-note-box{padding:8px 10px;border:1px solid #2c4058;border-radius:8px;background:#121c28;color:#b9c8d8;font-size:12px}
 .rp-modal-back{position:fixed;inset:0;z-index:1001;background:#0008}
 .rp-nsrt-modal{position:fixed;z-index:1002;left:50%;top:50%;transform:translate(-50%,-50%);width:min(640px,calc(100vw - 24px));max-height:calc(100vh - 24px);display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid #33465e;border-top:2px solid var(--gold);border-radius:10px;background:#0e151e;box-shadow:0 16px 40px #000c}
+.rp-assign-ask{position:fixed;z-index:1002;left:50%;top:50%;transform:translate(-50%,-50%);width:min(420px,calc(100vw - 24px));display:flex;flex-direction:column;gap:10px;padding:16px 16px 14px;border:1px solid #33465e;border-top:2px solid var(--gold);border-radius:10px;background:#0e151e;box-shadow:0 16px 40px #000c}
+.rp-assign-ask b{font-size:15px;color:var(--gold)}
+.rp-assign-ask p{margin:0;font-size:14px;line-height:1.5;color:var(--text)}
+.rp-assign-ask .sub{font-size:12px;color:var(--muted)}
+.rp-assign-ask-acts{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
+.rp-assign-ask-acts button{padding:8px 14px}
 .rp-nsrt-text{width:100%;min-height:260px;flex:1;resize:vertical;box-sizing:border-box;padding:8px;border:1px solid #243246;border-radius:8px;background:#080d13;color:#cfe0f0;font:11px/1.5 ui-monospace,Consolas,monospace;white-space:pre;overflow:auto}
 .rp-nsrt-acts{display:flex;align-items:center;gap:10px;justify-content:space-between}
 .rp-wcl-mini-apply{padding:2px 8px;font-size:10px;min-width:40px}
