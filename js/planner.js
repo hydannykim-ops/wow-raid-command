@@ -3337,6 +3337,13 @@
     }
     if (act === "wcl-apply-all") {
       if (wclLoading) return;
+      const ok = window.confirm(
+        t(
+          "공대원들의 생존기를 랭킹 1등의 타이밍으로 일괄 교체할까요? 이 보스에 올려 둔 생존기 배정은 그 시각으로 바뀝니다.",
+          "Replace every raider's defensives with rank 1 timings? Assignments already on this boss will be overwritten."
+        )
+      );
+      if (!ok) return;
       wclApplyAllTop();
       return;
     }
