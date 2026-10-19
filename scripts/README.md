@@ -68,7 +68,7 @@ RSC/Next 페이지만으로는 `bossTimeline` 이 없다. **공식 라이브러�
 
 - `timelineEnd` → 카탈로그 `duration`
 - `types` 에 `Raid AOE` 또는 `Raid Damage` → 그리드 주요 스킬 (`majorSpellIds`, `major: true`). 네크잘리 Corpse Blight `1307939` 는 제외.
-- `Phase Change` / `Intermission` → 이벤트 type `phase`. 페이즈 **기본 시각**은 이 태그가 아니라 3절 투표 결과다. 투표 파일이 비어 있으면 import 가 Phase Change 시각으로 폴백한다.
+- `Phase Change` / `Intermission` → 이벤트 type `phase`. 풀 직후(2초 미만)를 빼고 이 태그가 **하나도 없으면** `phases: []`. WCL이 전환을 찍어도 스조라크·울라텍처럼 시각이 고정인 넴은 플래너에서 나누지 않는다. 태그가 있으면 페이즈 **기본 시각**은 3절 투표 결과다. 투표 파일이 비어 있으면 그 태그 시각으로 폴백한다.
 
 ## 2. 한국어 스킬 이름
 
@@ -91,7 +91,7 @@ node scripts/derive-phase-starts.mjs --heroic  # 영웅 → scripts/phase-starts
 
 `.dev.vars` 의 `WCL_CLIENT_ID` / `WCL_CLIENT_SECRET` 필요. 신화 difficulty 5, 영웅 4. 스피드 랭킹 상위 킬을 샘플로 쓴다.
 
-로그에 `samples` (WCL 전환) 와 `candidates` 가 같이 찍힌다. 타이머 넴(봉인된 파수꾼)은 영웅/신화 시각이 비슷해도 정상이다. 페이즈가 없는 넴은 `phases: []`.
+로그에 `samples` (WCL 전환) 와 `candidates` 가 같이 찍힌다. 타이머 넴(봉인된 파수꾼)은 영웅/신화 시각이 비슷해도 정상이다. Viserio가 페이즈를 안 나누는 넴(스조라크, 울라텍, 바쉬니크, 쌍둥이 송곳니)은 투표 파일에 전환이 있어도 import 가 `phases: []` 로 둔다.
 
 ## 4. 카탈로그에 넣기
 
