@@ -34,11 +34,13 @@
       ko: {
         loginBnet: "Battle.net 로그인",
         logout: "로그아웃",
+        logoutTip: "이 사이트와 Battle.net에서 로그아웃합니다. 돌아오면 다른 계정으로 로그인할 수 있습니다.",
         preview: "미리보기",
       },
       en: {
         loginBnet: "Log in with Battle.net",
         logout: "Log out",
+        logoutTip: "Signs out of this site and Battle.net. When you come back, you can log in with a different account.",
         preview: "Preview",
       },
     };
@@ -68,20 +70,29 @@
   function renderAuth() {
     if (me.user) {
       const preview = me.preview ? `<span class="auth-preview">${t("preview")}</span>` : "";
+      const endBattleNet = me.authConfigured && !me.preview && !me.offline;
       box.innerHTML = `<span class="auth-tag">${me.user.battletag}</span>${preview}
-        <button class="ghost auth-btn" id="logoutBtn">${t("logout")}</button>`;
+        <button class="ghost auth-btn" id="logoutBtn"${endBattleNet ? ` title="${t("logoutTip")}"` : ""}>${t("logout")}</button>`;
       box.querySelector("#logoutBtn").onclick = async () => {
+        let loggedOut = me.offline;
         if (!me.offline) {
           try {
             await api("/api/auth/logout", { method: "POST" });
+            loggedOut = true;
           } catch {
-            /* file:// 이나 API 없음 */
+            loggedOut = false;
           }
         }
+        if (!loggedOut) return;
         writeLocalSession(null);
+        const switchAccount = endBattleNet;
         me.user = null;
         me.preview = false;
         charCache = null;
+        if (switchAccount) {
+          location.assign("https://battle.net/login/logout");
+          return;
+        }
         renderAuth();
       };
     } else if (me.authConfigured) {
