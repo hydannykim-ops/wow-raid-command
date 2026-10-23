@@ -97,7 +97,25 @@ const KO = fs.existsSync(koPath) ? JSON.parse(fs.readFileSync(koPath, "utf8")) :
 const phasePath = path.join(__dirname, heroic ? "phase-starts-heroic.json" : "phase-starts.json");
 const PHASES = fs.existsSync(phasePath) ? JSON.parse(fs.readFileSync(phasePath, "utf8")) : {};
 
+/** Viserio가 페이즈로 표시한 시각. 풀 직후(t<2)는 제외. */
+function viserioPhaseMarks(dump) {
+  const seen = new Set();
+  const out = [];
+  for (const e of dump?.events || []) {
+    const types = e.types || [];
+    if (!types.includes("Phase Change") && !types.includes("Intermission")) continue;
+    const t = Math.round(Number(e.time) || 0);
+    if (t < 2 || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
+}
+
 function phaseList(id, dump) {
+  const marks = viserioPhaseMarks(dump);
+  // WCL만 나누고 Viserio/NSRT는 고정 시계인 넴(스조라크, 울라텍)은 플래너에서도 나누지 않는다.
+  if (!marks.length) return [];
   const info = PHASES[id];
   const starts = info?.phaseStarts || [];
   if (starts.length) {
@@ -106,16 +124,7 @@ function phaseList(id, dump) {
       .find((ids) => ids.length >= starts.length) || [];
     return starts.map((s, i) => ({ t: s.t, id: idsFromSample[s.index] ?? i + 2 }));
   }
-  const seen = new Set();
-  const out = [];
-  for (const e of dump?.events || []) {
-    if (!(e.types || []).includes("Phase Change")) continue;
-    const t = Math.round(Number(e.time) || 0);
-    if (t < 2 || seen.has(t)) continue;
-    seen.add(t);
-    out.push({ t, id: out.length + 2 });
-  }
-  return out;
+  return marks.map((t, i) => ({ t, id: i + 2 }));
 }
 
 /** Viserio tags these Raid Damage, but they are not majors for our grid. */
@@ -211,14 +220,21 @@ function buildEventLines(id, dump, indent) {
   return lines;
 }
 
+function phasesField(list, indent) {
+  const body = list.map((p) => `{ t: ${p.t}, id: ${p.id} }`).join(", ");
+  const comment = list.length
+    ? `${indent}/** 이 타임라인 기준 페이즈 전환 (id = WCL 페이즈 번호) */`
+    : `${indent}/** Viserio/NSRT가 페이즈를 나누지 않아 플래너에서도 고정 시계로 둔다. */`;
+  return `${comment}\n${indent}phases: [${body}],`;
+}
+
 function buildHeroicJs(id, dump) {
   const duration = dumpDuration(dump);
   const majors = dumpMajors(id, dump);
   const majorNames = [...new Set((dump.events || []).filter((e) => isBossMajor(id, e)).map((e) => e.spellName))].join(" · ");
-  const phasesJs = phaseList(id, dump).map((p) => `{ t: ${p.t}, id: ${p.id} }`).join(", ");
   return `      heroic: {
         duration: ${duration},
-        phases: [${phasesJs}],
+${phasesField(phaseList(id, dump), "        ")}
         /**
          * Heroic: Viserio bossTimeline (official HC template)
          * majors = Raid AOE / Raid Damage → ${majorNames || "(none)"}
@@ -320,8 +336,7 @@ function buildBoss(id, dump) {
       name: "${esc(meta.name)}",
       nameKo: "${esc(meta.nameKo)}",
       duration: ${duration},
-      /** 이 타임라인 기준 페이즈 전환 (id = WCL 페이즈 번호) */
-      phases: [${phaseList(id, dump).map((p) => `{ t: ${p.t}, id: ${p.id} }`).join(", ")}],
+${phasesField(phaseList(id, dump), "      ")}
       iconUrl: bossIcon("${meta.iconSlug}"),
       /**
        * Mythic: Viserio bossTimeline
