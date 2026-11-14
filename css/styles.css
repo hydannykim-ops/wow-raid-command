@@ -99,6 +99,15 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .ai-rec-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
 .ai-rec-head b{font-size:14px}
 .ai-rec-meta{color:var(--muted);font-size:11px;margin-top:4px}
+.ai-stack-checks{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:8px;font-size:12px;font-weight:800}
+.ai-stack-checks label{display:inline-flex;align-items:center;gap:5px;color:var(--text);cursor:pointer}
+.ai-stack-checks input{accent-color:var(--gold);width:14px;height:14px}
+.ai-stack-checks span{color:var(--muted);font-size:11px;font-weight:600}
+.spec.reserve{outline:1px dashed var(--gold);outline-offset:-4px}
+.spec-reserve-tag{position:static;margin-left:6px;vertical-align:1px}
+.slot.reserve{border-style:dashed;border-color:color-mix(in srgb,var(--class) 70%,var(--gold));background:repeating-linear-gradient(-45deg,transparent,transparent 5px,color-mix(in srgb,var(--class) 14%,transparent) 5px,color-mix(in srgb,var(--class) 14%,transparent) 6px),color-mix(in srgb,var(--class) 12%,#152130)}
+.reserve-tag{display:inline-block;margin-left:6px;color:var(--gold);font-style:normal;font-weight:800;border:1px dashed var(--gold);border-radius:99px;padding:0 5px}
+.reserve-count{margin-left:8px;color:var(--gold);font-style:normal;font-size:12px;font-weight:800;border:1px dashed var(--gold);border-radius:99px;padding:2px 7px;vertical-align:2px}
 .ai-rank{padding:10px 11px;border-radius:10px;border:1px solid var(--line);background:#101821}
 .ai-rank.warn{border-color:#a94957;background:#3d2028}
 .ai-rank.warn .ai-rank-h{color:#ffb1b4}

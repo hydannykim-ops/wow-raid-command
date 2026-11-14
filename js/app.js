@@ -56,6 +56,8 @@ let allSynergiesDone = false;
 let celebrateTimer = null;
 let aiRecOpen = false;
 let applicants = [];
+let wantTwoDk = false;
+let wantTwoWl = false;
 
 const $ = (x) => document.getElementById(x);
 
@@ -85,8 +87,8 @@ const T = {
     plazaSoon: "오그리마 광장과 게시판을 준비하고 있습니다.",
     plazaTitle: "커뮤니티",
     specTitle: "전문화 선택",
-    specSub: "전문화를 클릭해 파티에 추가하거나 제거하세요.",
-    specSubAi: "AI도우미가 열린 동안 전문화를 클릭하면 신청온 사람에 올라갑니다.",
+    specSub: "클릭하면 넣고, 우클릭하면 점선 예비가 됩니다. 예비에서 한 번 더 우클릭하면 빠집니다.",
+    specSubAi: "AI도우미가 열린 동안 클릭하면 신청온 사람에 올라갑니다. 우클릭은 예비로 넣어 봅니다.",
     search: "직업 / 전문화 검색",
     clear: "초기화",
     raidTitle: "레이드 구성",
@@ -139,8 +141,8 @@ const T = {
     plazaSoon: "The plaza and boards are not open yet.",
     plazaTitle: "Community",
     specTitle: "Choose Specialization",
-    specSub: "Click a specialization to add or remove it from the raid.",
-    specSubAi: "While AI Helper is open, clicking a spec queues an applicant.",
+    specSub: "Click to add. Right-click marks a dotted reserve, and another right-click removes it.",
+    specSubAi: "While AI Helper is open, a click queues an applicant. Right-click still previews a reserve.",
     search: "Search class / specialization",
     clear: "Clear",
     raidTitle: "Raid Roster",
@@ -267,7 +269,18 @@ const HEAL_SYN_NEEDS = [
   ["Evoker", 1],
 ];
 const NON_MELEE_SYNERGY = ["Mage", "Evoker", "Warlock", "Hunter"];
-const DK_WL_TARGET = 2;
+function stackTarget(className) {
+  if (className === "Death Knight") return wantTwoDk ? 2 : 1;
+  if (className === "Warlock") return wantTwoWl ? 2 : 1;
+  return 1;
+}
+
+function roleNeeds(needs) {
+  return needs.map(([className, want]) => [
+    className,
+    className === "Death Knight" || className === "Warlock" ? stackTarget(className) : want,
+  ]);
+}
 const GROW_CYCLE = ["Heal", "Melee", "Ranged", "Ranged", "Ranged"];
 const CORE_ALT_SPEC = {
   Monk: { Tank: ["양조", "Brewmaster"], Heal: ["운무", "Mistweaver"], Melee: ["풍운", "Windwalker"] },
@@ -749,11 +762,22 @@ function remainingSynAfter(rem, covered, dkCount, wlCount, seatedCores) {
   };
 }
 
+function stackGoalPhrase() {
+  const dk = wantTwoDk
+    ? tx("2죽기", "2 Death Knights")
+    : tx("죽기 1명", "1 Death Knight");
+  const wl = wantTwoWl
+    ? tx("2흑마", "2 Warlocks")
+    : tx("흑마 1명", "1 Warlock");
+  return lang === "ko" ? `${dk}·${wl}` : `${dk} and ${wl}`;
+}
+
 function leftoverSynAdvice(fit) {
   if (!fit.stackOk) {
+    const goal = stackGoalPhrase();
     return tx(
-      "이 사람을 받으면 2죽기·2흑마를 모두 채울 자리가 없습니다.",
-      "Taking this player leaves no room for both 2 Death Knights and 2 Warlocks."
+      `이 사람을 받으면 ${goal} 자리를 모두 채우지 못합니다.`,
+      `Taking this player leaves no room for ${goal}.`
     );
   }
   if (fit.optionals.length) {
@@ -769,16 +793,18 @@ function leftoverSynAdvice(fit) {
 }
 
 function dkWlShared(seated, dkCount, wlCount) {
-  const needDk = Math.max(0, DK_WL_TARGET - dkCount);
-  const needWl = Math.max(0, DK_WL_TARGET - wlCount);
+  const dkGoal = stackTarget("Death Knight");
+  const wlGoal = stackTarget("Warlock");
+  const needDk = Math.max(0, dkGoal - dkCount);
+  const needWl = Math.max(0, wlGoal - wlCount);
   const dkTank = Math.min(needDk, seated.tank);
   const ok = needDk - dkTank + needWl <= seated.dps;
   let dk = dkCount + dkTank;
   let wl = wlCount;
   let dps = seated.dps;
-  while (dps > 0 && (dk < DK_WL_TARGET || wl < DK_WL_TARGET)) {
-    if (wl < DK_WL_TARGET && wl <= dk) wl++;
-    else if (dk < DK_WL_TARGET) dk++;
+  while (dps > 0 && (dk < dkGoal || wl < wlGoal)) {
+    if (wl < wlGoal && (dk >= dkGoal || wl <= dk)) wl++;
+    else if (dk < dkGoal) dk++;
     else wl++;
     dps--;
   }
@@ -829,15 +855,18 @@ function tankHealSlotDeny(spec, rem) {
 
 function dkWlRecommendMsg(spec) {
   const n = classCountOf(spec.class);
-  if (spec.class === "Death Knight" && n < DK_WL_TARGET) {
-    return n === 0
-      ? tx("죽기 1명은 필수 시너지급입니다. 지금 받으면 좋습니다.", "The first Death Knight is required-tier. Good to take now.")
-      : tx("2죽기를 채웁니다. 지금 받으면 좋습니다.", "This completes 2 Death Knights. Good to take now.");
+  const goal = stackTarget(spec.class);
+  if (spec.class === "Death Knight" && n < goal) {
+    if (n === 0) {
+      return tx("죽기 1명은 필수 시너지급입니다. 지금 받으면 좋습니다.", "The first Death Knight is required-tier. Good to take now.");
+    }
+    if (wantTwoDk) return tx("2죽기를 채웁니다. 지금 받으면 좋습니다.", "This completes 2 Death Knights. Good to take now.");
   }
-  if (spec.class === "Warlock" && n < DK_WL_TARGET) {
-    return n === 0
-      ? tx("흑마 1명은 필수 시너지급입니다. 지금 받으면 좋습니다.", "The first Warlock is required-tier. Good to take now.")
-      : tx("2흑마를 채웁니다. 지금 받으면 좋습니다.", "This completes 2 Warlocks. Good to take now.");
+  if (spec.class === "Warlock" && n < goal) {
+    if (n === 0) {
+      return tx("흑마 1명은 필수 시너지급입니다. 지금 받으면 좋습니다.", "The first Warlock is required-tier. Good to take now.");
+    }
+    if (wantTwoWl) return tx("2흑마를 채웁니다. 지금 받으면 좋습니다.", "This completes 2 Warlocks. Good to take now.");
   }
   return "";
 }
@@ -932,7 +961,7 @@ function raidSynergiesCovered() {
 }
 
 function secondDeathKnight(spec) {
-  return spec.class === "Death Knight" && classCountOf("Death Knight") >= 1;
+  return wantTwoDk && spec.class === "Death Knight" && classCountOf("Death Knight") >= 1;
 }
 
 function meleeSeventh(spec) {
@@ -1043,7 +1072,7 @@ function evaluateApplicant(spec) {
 
   const nextDk = classCountOf("Death Knight") + (spec.class === "Death Knight" ? 1 : 0);
   const nextWl = classCountOf("Warlock") + (spec.class === "Warlock" ? 1 : 0);
-  const needDk = Math.max(0, DK_WL_TARGET - nextDk);
+  const needDk = Math.max(0, stackTarget("Death Knight") - nextDk);
   const advice = [];
   const nice = [];
   const fitAfter = remainingSynAfter(rem, covered, nextDk, nextWl, seated);
@@ -1100,7 +1129,7 @@ function evaluateApplicant(spec) {
   const extraMelee =
     spec.role === "Melee" && !fillingCore && !fillingTank && !fillingHeal && !fillingOpt;
   const extraRanged = spec.role === "Ranged" && !fillingCore && !fillingOpt;
-  const canFillMelee = canFillRoleSynAfter("Melee", spec, nextCounts, target, MELEE_SYN_NEEDS);
+  const canFillMelee = canFillRoleSynAfter("Melee", spec, nextCounts, target, roleNeeds(MELEE_SYN_NEEDS));
   const canFillHeal = canFillRoleSynAfter("Heal", spec, nextCounts, target, HEAL_SYN_NEEDS);
   const flexMelee = extraMelee && canFillMelee && nextCounts.Melee <= meleeCap;
   const flexRanged = extraRanged;
@@ -1154,7 +1183,7 @@ function evaluateApplicant(spec) {
     const room = roleRoomReason(spec, nextCounts, target);
     const extra =
       flexMelee
-        ? raidSynergiesCovered() || synNeededAfter(spec, MELEE_SYN_NEEDS) === 0
+        ? raidSynergiesCovered() || synNeededAfter(spec, roleNeeds(MELEE_SYN_NEEDS)) === 0
           ? tx(
               "근딜 시너지는 이미 채워져 아무 근딜이나 받아도 됩니다.",
               "Melee synergies are already covered, so any melee is fine."
@@ -1164,7 +1193,7 @@ function evaluateApplicant(spec) {
               "Taking this player still leaves enough melee seats to finish synergies."
             )
         : flexRanged
-          ? synNeededAfter(spec, RANGED_SYN_NEEDS) === 0
+          ? synNeededAfter(spec, roleNeeds(RANGED_SYN_NEEDS)) === 0
             ? tx(
                 "원딜 시너지는 이미 채워져 아무 원딜이나 받아도 됩니다.",
                 "Ranged synergies are already covered, so any ranged is fine."
@@ -1424,6 +1453,11 @@ function buildAiAdviceHtml() {
             ? `${size}인 · 현재 ${roster.length}/${size} · 목표 탱 ${target.Tank} · 딜 ${target.DPS} · 힐 ${target.Heal}`
             : `${size}-man · ${roster.length}/${size} · target T${target.Tank} / DPS ${target.DPS} / H${target.Heal}`
         }</div>
+        <div class="ai-stack-checks">
+          <label><input type="checkbox" data-stack="dk" ${wantTwoDk ? "checked" : ""}> ${lang === "ko" ? "2죽기" : "2 DKs"}</label>
+          <label><input type="checkbox" data-stack="wl" ${wantTwoWl ? "checked" : ""}> ${lang === "ko" ? "2흑마" : "2 Warlocks"}</label>
+          <span>${lang === "ko" ? "체크한 직업만 2명까지 추천합니다." : "Only checked classes are filled to 2."}</span>
+        </div>
       </div>
       <button class="ghost" type="button" id="aiRecClose">${tr("aiRecClose")}</button>
     </div>
@@ -1480,6 +1514,13 @@ function bindAiAdvice() {
     el.onclick = () => {
       const spec = defaultSpecForClass(el.dataset.aiClass);
       if (spec) addApplicant(spec);
+    };
+  });
+  document.querySelectorAll("[data-stack]").forEach((el) => {
+    el.onchange = () => {
+      if (el.dataset.stack === "dk") wantTwoDk = el.checked;
+      if (el.dataset.stack === "wl") wantTwoWl = el.checked;
+      renderAiAdvice();
     };
   });
 }
@@ -1628,13 +1669,19 @@ function renderSpecs() {
   $("specList").innerHTML =
     arr
       .map((s) => {
-        const sel = roster.some((r) => r.class === s.class && r.spec === s.spec);
+        const copies = roster.filter((r) => r.class === s.class && r.spec === s.spec);
+        const confirmed = copies.some((r) => !r.reserve);
+        const reserved = copies.some((r) => r.reserve);
         const queued =
           aiRecOpen &&
           applicants.some((a) => a.spec.class === s.class && a.spec.spec === s.spec);
-        return `<div class="spec ${sel ? "selected" : ""} ${queued ? "queued" : ""}" role="button" tabindex="0" data-cell="${S.indexOf(s)}" style="--class:${s.color}" aria-pressed="${sel}"><div class="spec-main"><div class="spec-title">${displayClass(s)} · ${displaySpec(s)}</div><div class="spec-en">${
+        const reserveTag =
+          reserved && !confirmed
+            ? `<i class="reserve-tag spec-reserve-tag">${lang === "ko" ? "예비" : "Reserve"}</i>`
+            : "";
+        return `<div class="spec ${confirmed ? "selected" : ""} ${reserved ? "reserve" : ""} ${queued ? "queued" : ""}" role="button" tabindex="0" data-cell="${S.indexOf(s)}" style="--class:${s.color}" aria-pressed="${confirmed || reserved}"><div class="spec-main"><div class="spec-title">${displayClass(s)} · ${displaySpec(s)}</div><div class="spec-en">${
           lang === "ko" ? `${s.spec} · ${s.class}` : `${s.specKo} · ${s.classKo}`
-        }</div></div><span class="role ${s.role}">${role(s.role)}</span></div>`;
+        }</div>${reserveTag}</div><span class="role ${s.role}">${role(s.role)}</span></div>`;
       })
       .join("") ||
     `<div class="empty">${
@@ -1648,6 +1695,10 @@ function renderSpecs() {
       else addSpec(spec);
     };
     c.onclick = act;
+    c.oncontextmenu = (e) => {
+      e.preventDefault();
+      cycleSpecReserve(S[+c.dataset.cell]);
+    };
     c.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
@@ -1657,9 +1708,24 @@ function renderSpecs() {
   });
 }
 
-function addSpec(s) {
+function cycleSpecReserve(spec) {
+  const matches = roster.filter((r) => r.class === spec.class && r.spec === spec.spec);
+  if (!matches.length) {
+    addSpec(spec, true);
+    return;
+  }
+  const last = matches[matches.length - 1];
+  if (!last.reserve) {
+    last.reserve = true;
+    renderAll();
+    return;
+  }
+  removeInstance(last.instanceId);
+}
+
+function addSpec(s, reserve) {
   if (roster.length < +$("raidSize").value) {
-    roster.push({ ...s, instanceId: String(++instanceSeq) });
+    roster.push({ ...s, instanceId: String(++instanceSeq), reserve: !!reserve });
   }
   renderAll();
 }
@@ -1690,11 +1756,11 @@ function renderColumns() {
         ? list
             .map(
               (s) =>
-                `<div class="slot" role="button" tabindex="0" data-instance="${s.instanceId}" style="--class:${s.color}"><b>${displayClass(s)} · ${displaySpec(s)}</b><span>${
+                `<div class="slot${s.reserve ? " reserve" : ""}" role="button" tabindex="0" data-instance="${s.instanceId}" style="--class:${s.color}"><b>${displayClass(s)} · ${displaySpec(s)}</b><span>${
                   lang === "ko"
                     ? `${s.spec} / ${s.class}`
                     : `${s.specKo} / ${s.classKo}`
-                }</span></div>`
+                }${s.reserve ? `<i class="reserve-tag">${lang === "ko" ? "예비" : "Reserve"}</i>` : ""}</span></div>`
             )
             .join("")
         : `<div class="empty">${lang === "ko" ? "아직 없음" : "Empty"}</div>`
@@ -1702,8 +1768,22 @@ function renderColumns() {
   }).join("");
 
   document.querySelectorAll("[data-instance]").forEach((c) => {
-    c.title = lang === "ko" ? "클릭해서 제거" : "Click to remove";
+    c.title =
+      lang === "ko"
+        ? "클릭해서 제거 · 우클릭하면 예비, 한 번 더 우클릭하면 제거"
+        : "Click to remove · Right-click marks a reserve, right-click again removes";
     c.onclick = () => removeInstance(c.dataset.instance);
+    c.oncontextmenu = (e) => {
+      e.preventDefault();
+      const member = roster.find((s) => s.instanceId === c.dataset.instance);
+      if (!member) return;
+      if (!member.reserve) {
+        member.reserve = true;
+        renderAll();
+        return;
+      }
+      removeInstance(member.instanceId);
+    };
     c.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
@@ -1803,10 +1883,15 @@ function renderHeadcount() {
   const by = Object.fromEntries(
     ROLES.map((r) => [r, roster.filter((s) => s.role === r).length])
   );
+  const reserveN = roster.filter((s) => s.reserve).length;
   $("headcount").innerHTML = `<div class="headcount-main">${
     lang === "ko" ? "현재" : "Current"
   } <em>${roster.length}</em> / ${size}${
     lang === "ko" ? "명" : " players"
+  }${
+    reserveN
+      ? `<i class="reserve-count">${lang === "ko" ? `예비 ${reserveN}` : `${reserveN} reserve`}</i>`
+      : ""
   }</div><div class="headcount-roles">${
     lang === "ko"
       ? `탱커 ${by.Tank} · 근딜 ${by.Melee} · 원딜 ${by.Ranged} · 힐 ${by.Heal}`
