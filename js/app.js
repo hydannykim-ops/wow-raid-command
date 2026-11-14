@@ -58,6 +58,9 @@ let aiRecOpen = false;
 let applicants = [];
 let wantTwoDk = false;
 let wantTwoWl = false;
+let helperPersistReady = false;
+
+const HELPER_STORE_KEY = "wow-raid-helper";
 
 const $ = (x) => document.getElementById(x);
 
@@ -87,12 +90,12 @@ const T = {
     plazaSoon: "오그리마 광장과 게시판을 준비하고 있습니다.",
     plazaTitle: "커뮤니티",
     specTitle: "전문화 선택",
-    specSub: "클릭하면 넣고, 우클릭하면 점선 예비가 됩니다. 예비에서 한 번 더 우클릭하면 빠집니다.",
-    specSubAi: "AI도우미가 열린 동안 클릭하면 신청온 사람에 올라갑니다. 우클릭은 예비로 넣어 봅니다.",
+    specSub: "클릭하면 넣습니다. 우클릭은 예비, 한 번 더 우클릭하면 예비가 풀립니다. 슬롯을 클릭하면 빠집니다.",
+    specSubAi: "AI도우미가 열린 동안 클릭하면 신청온 사람에 올라갑니다. 우클릭은 예비와 예비 취소를 오갑니다.",
     search: "직업 / 전문화 검색",
     clear: "초기화",
     raidTitle: "레이드 구성",
-    raidSub: "탱커·근딜·원딜·힐 역할별 슬롯",
+    raidSub: "탱커·근딜·원딜·힐 역할별 슬롯. 이 브라우저에 남겨 둡니다.",
     size: "인원",
     synTitle: "시너지 표",
     synSub: "미충족 시너지가 위에 먼저 보이며, 필요한 직업을 강조해 표시합니다.",
@@ -141,12 +144,12 @@ const T = {
     plazaSoon: "The plaza and boards are not open yet.",
     plazaTitle: "Community",
     specTitle: "Choose Specialization",
-    specSub: "Click to add. Right-click marks a dotted reserve, and another right-click removes it.",
-    specSubAi: "While AI Helper is open, a click queues an applicant. Right-click still previews a reserve.",
+    specSub: "Click to add. Right-click marks a reserve, and another right-click clears it. Click a slot to remove.",
+    specSubAi: "While AI Helper is open, a click queues an applicant. Right-click toggles a reserve.",
     search: "Search class / specialization",
     clear: "Clear",
     raidTitle: "Raid Roster",
-    raidSub: "Slots grouped by tank, melee, ranged and healer",
+    raidSub: "Slots grouped by tank, melee, ranged and healer. Kept in this browser.",
     size: "Size",
     synTitle: "Synergy Table",
     synSub: "Missing synergies appear first, with required classes highlighted.",
@@ -1520,6 +1523,7 @@ function bindAiAdvice() {
     el.onchange = () => {
       if (el.dataset.stack === "dk") wantTwoDk = el.checked;
       if (el.dataset.stack === "wl") wantTwoWl = el.checked;
+      saveHelperState();
       renderAiAdvice();
     };
   });
@@ -1715,12 +1719,8 @@ function cycleSpecReserve(spec) {
     return;
   }
   const last = matches[matches.length - 1];
-  if (!last.reserve) {
-    last.reserve = true;
-    renderAll();
-    return;
-  }
-  removeInstance(last.instanceId);
+  last.reserve = !last.reserve;
+  renderAll();
 }
 
 function addSpec(s, reserve) {
@@ -1770,19 +1770,15 @@ function renderColumns() {
   document.querySelectorAll("[data-instance]").forEach((c) => {
     c.title =
       lang === "ko"
-        ? "클릭해서 제거 · 우클릭하면 예비, 한 번 더 우클릭하면 제거"
-        : "Click to remove · Right-click marks a reserve, right-click again removes";
+        ? "클릭해서 제거 · 우클릭하면 예비, 한 번 더 우클릭하면 예비 취소"
+        : "Click to remove · Right-click marks a reserve, right-click again clears it";
     c.onclick = () => removeInstance(c.dataset.instance);
     c.oncontextmenu = (e) => {
       e.preventDefault();
       const member = roster.find((s) => s.instanceId === c.dataset.instance);
       if (!member) return;
-      if (!member.reserve) {
-        member.reserve = true;
-        renderAll();
-        return;
-      }
-      removeInstance(member.instanceId);
+      member.reserve = !member.reserve;
+      renderAll();
     };
     c.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") {
@@ -1914,6 +1910,56 @@ function goPlanRaid() {
   }
 }
 
+function saveHelperState() {
+  if (!helperPersistReady) return;
+  const sizeEl = $("raidSize");
+  if (!sizeEl) return;
+  try {
+    localStorage.setItem(
+      HELPER_STORE_KEY,
+      JSON.stringify({
+        version: 1,
+        size: +sizeEl.value,
+        wantTwoDk,
+        wantTwoWl,
+        members: roster.map((s) => ({
+          class: s.class,
+          spec: s.spec,
+          reserve: !!s.reserve,
+          instanceId: s.instanceId,
+        })),
+      })
+    );
+  } catch (_) {}
+}
+
+function loadHelperState() {
+  let data = null;
+  try {
+    data = JSON.parse(localStorage.getItem(HELPER_STORE_KEY) || "null");
+  } catch (_) {
+    return;
+  }
+  if (!data || !Array.isArray(data.members)) return;
+  const sizeEl = $("raidSize");
+  const size = String(data.size || 20);
+  if (sizeEl && [...sizeEl.options].some((o) => o.value === size)) sizeEl.value = size;
+  wantTwoDk = !!data.wantTwoDk;
+  wantTwoWl = !!data.wantTwoWl;
+  roster = [];
+  instanceSeq = 0;
+  const cap = +(sizeEl?.value || 20);
+  for (const m of data.members) {
+    if (roster.length >= cap) break;
+    const spec = S.find((s) => s.class === m.class && s.spec === m.spec);
+    if (!spec) continue;
+    const rawId = String(m.instanceId || "");
+    const instanceId = /^\d+$/.test(rawId) ? rawId : String(++instanceSeq);
+    if (/^\d+$/.test(instanceId)) instanceSeq = Math.max(instanceSeq, Number(instanceId));
+    roster.push({ ...spec, instanceId, reserve: !!m.reserve });
+  }
+}
+
 function renderAll() {
   renderFilters();
   renderSpecs();
@@ -1930,6 +1976,7 @@ function renderAll() {
         roster.filter((s) => s.role === r).length
       }</b><span>${role(r)}</span></div>`
   ).join("");
+  saveHelperState();
 }
 
 const VIEW_PATH = {
@@ -2148,6 +2195,7 @@ window.RaidRoster = {
         spec: s.spec,
         role: s.role,
         playerId: s.instanceId,
+        reserve: !!s.reserve,
       })),
     };
   },
@@ -2159,7 +2207,7 @@ window.RaidRoster = {
     instanceSeq = 0;
     (data.members || []).forEach((m) => {
       const spec = S.find((s) => s.class === m.class && s.spec === m.spec);
-      if (spec) roster.push({ ...spec, instanceId: String(++instanceSeq) });
+      if (spec) roster.push({ ...spec, instanceId: String(++instanceSeq), reserve: !!m.reserve });
     });
     renderAll();
   },
@@ -2178,4 +2226,6 @@ $("clear").onclick = () => {
   renderAll();
 };
 
+loadHelperState();
+helperPersistReady = true;
 goToRoute(parseAppPath(locationPath()), { replace: true });
