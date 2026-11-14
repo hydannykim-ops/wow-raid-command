@@ -114,15 +114,16 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .app:has(#helperView:not(.hidden) .spec-list.compact) #helperView .panel{min-height:0;overflow:auto}
 .app:has(#helperView:not(.hidden) .spec-list.compact) #helperView .panel:first-child{display:flex;flex-direction:column;overflow:hidden}
 .app:has(#helperView:not(.hidden) .spec-list.compact) .site-contact{flex:none}
-.spec-list.compact{display:flex;flex-direction:column;gap:6px;flex:1;height:auto;min-height:0;overflow:hidden}
-.spec-row{display:flex;align-items:stretch;gap:8px;flex:1 1 0;min-height:0;padding:0 0 0 8px;border-radius:10px;border-left:4px solid var(--class);background:linear-gradient(90deg,color-mix(in srgb,var(--class) 16%,#101721),#101721 42%)}
-.spec-row-name{flex:0 0 6.6em;display:flex;align-items:center;font-size:13px;font-weight:850;color:var(--class);white-space:nowrap}
-.spec-row-specs{display:flex;flex:1;align-items:stretch;gap:6px;min-width:0;padding:3px 4px 3px 0}
-.spec-chip{flex:1 1 0;min-width:0;border:1px solid color-mix(in srgb,var(--class) 55%,#3a4a5c);background:#101821;color:var(--class);border-radius:8px;padding:0 4px;font-size:16px;font-weight:800;line-height:1;white-space:nowrap;display:flex;align-items:center;justify-content:center}
-.spec-chip:hover{filter:brightness(1.15)}
-.spec-chip.selected{background:color-mix(in srgb,var(--class) 42%,#15352b);color:#f3fff8;border-color:#66df9e}
-.spec-chip.reserve{border-style:dashed;border-color:var(--gold)}
-.spec-chip.queued{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--gold) 70%,transparent)}
+.spec-list.compact{display:flex;flex-direction:column;gap:5px;flex:1;height:auto;min-height:0;overflow:hidden;padding-right:0}
+.spec-row{display:flex;align-items:stretch;gap:8px;flex:1 1 0;min-height:0;padding:0;border:0;border-radius:0;background:none}
+.spec-row-name{flex:0 0 5.6em;display:flex;align-items:center;font-size:12px;font-weight:800;letter-spacing:-.02em;color:color-mix(in srgb,var(--class) 82%,#fff);white-space:nowrap}
+.spec-row-specs{display:flex;flex:1;align-items:stretch;gap:0;min-width:0;padding:1px 0;border-radius:9px;overflow:hidden;background:#121a24;box-shadow:inset 0 0 0 1px #2a3848}
+.spec-chip{flex:1 1 0;min-width:0;border:0;border-right:1px solid #2a3848;border-radius:0;background:transparent;color:color-mix(in srgb,var(--class) 70%,#e7eef6);padding:0 2px;font-size:13px;font-weight:700;line-height:1;white-space:nowrap;display:flex;align-items:center;justify-content:center}
+.spec-chip:last-child{border-right:0}
+.spec-chip:hover{background:color-mix(in srgb,var(--class) 14%,transparent);filter:none}
+.spec-chip.selected,.spec-chip.selected:hover{background:transparent;color:color-mix(in srgb,var(--class) 70%,#e7eef6);border-color:#2a3848;filter:none}
+.spec-chip.reserve{margin:3px;border:1px dashed color-mix(in srgb,var(--gold) 75%,#2a3848);border-radius:7px;background:transparent}
+.spec-chip.queued{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--gold) 55%,transparent)}
 .spec.reserve{outline:1px dashed var(--gold);outline-offset:-4px}
 .spec-reserve-tag{position:static;margin-left:6px;vertical-align:1px}
 .slot.reserve{border-style:dashed;border-color:color-mix(in srgb,var(--class) 70%,var(--gold));background:repeating-linear-gradient(-45deg,transparent,transparent 5px,color-mix(in srgb,var(--class) 14%,transparent) 5px,color-mix(in srgb,var(--class) 14%,transparent) 6px),color-mix(in srgb,var(--class) 12%,#152130)}
