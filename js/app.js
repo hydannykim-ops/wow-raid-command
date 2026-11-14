@@ -58,6 +58,7 @@ let aiRecOpen = false;
 let applicants = [];
 let wantTwoDk = false;
 let wantTwoWl = false;
+let specCompact = false;
 let helperPersistReady = false;
 
 const HELPER_STORE_KEY = "wow-raid-helper";
@@ -90,6 +91,7 @@ const T = {
     plazaSoon: "오그리마 광장과 게시판을 준비하고 있습니다.",
     plazaTitle: "커뮤니티",
     specTitle: "전문화 선택",
+    specCompact: "모아보기",
     specSub: "클릭하면 넣습니다. 우클릭은 예비, 한 번 더 우클릭하면 예비가 풀립니다. 슬롯을 클릭하면 빠집니다.",
     specSubAi: "AI도우미가 열린 동안 클릭하면 신청온 사람에 올라갑니다. 우클릭은 예비와 예비 취소를 오갑니다.",
     search: "직업 / 전문화 검색",
@@ -144,6 +146,7 @@ const T = {
     plazaSoon: "The plaza and boards are not open yet.",
     plazaTitle: "Community",
     specTitle: "Choose Specialization",
+    specCompact: "Compact",
     specSub: "Click to add. Right-click marks a reserve, and another right-click clears it. Click a slot to remove.",
     specSubAi: "While AI Helper is open, a click queues an applicant. Right-click toggles a reserve.",
     search: "Search class / specialization",
@@ -1663,36 +1666,67 @@ function renderFilters() {
   });
 }
 
-function renderSpecs() {
+function visibleSpecs() {
   const q = $("search").value.toLowerCase();
-  const arr = S.filter(
+  return S.filter(
     (s) =>
       (filter === "All" || s.role === filter) &&
       `${s.class} ${s.spec} ${s.classKo} ${s.specKo}`.toLowerCase().includes(q)
   );
-  $("specList").innerHTML =
-    arr
-      .map((s) => {
-        const copies = roster.filter((r) => r.class === s.class && r.spec === s.spec);
-        const confirmed = copies.some((r) => !r.reserve);
-        const reserved = copies.some((r) => r.reserve);
-        const queued =
-          aiRecOpen &&
-          applicants.some((a) => a.spec.class === s.class && a.spec.spec === s.spec);
-        const reserveTag =
-          reserved && !confirmed
-            ? `<i class="reserve-tag spec-reserve-tag">${lang === "ko" ? "예비" : "Reserve"}</i>`
-            : "";
-        return `<div class="spec ${confirmed ? "selected" : ""} ${reserved ? "reserve" : ""} ${queued ? "queued" : ""}" role="button" tabindex="0" data-cell="${S.indexOf(s)}" style="--class:${s.color}" aria-pressed="${confirmed || reserved}"><div class="spec-main"><div class="spec-title">${displayClass(s)} · ${displaySpec(s)}</div><div class="spec-en">${
-          lang === "ko" ? `${s.spec} · ${s.class}` : `${s.specKo} · ${s.classKo}`
-        }</div>${reserveTag}</div><span class="role ${s.role}">${role(s.role)}</span></div>`;
-      })
-      .join("") ||
-    `<div class="empty">${
-      lang === "ko" ? "조건에 맞는 전문화가 없습니다." : "No matching specialization."
-    }</div>`;
+}
 
-  document.querySelectorAll("[data-cell]").forEach((c) => {
+function specPickState(s) {
+  const copies = roster.filter((r) => r.class === s.class && r.spec === s.spec);
+  return {
+    confirmed: copies.some((r) => !r.reserve),
+    reserved: copies.some((r) => r.reserve),
+    queued:
+      aiRecOpen &&
+      applicants.some((a) => a.spec.class === s.class && a.spec.spec === s.spec),
+  };
+}
+
+function specCellHtml(s) {
+  const { confirmed, reserved, queued } = specPickState(s);
+  const reserveTag =
+    reserved && !confirmed
+      ? `<i class="reserve-tag spec-reserve-tag">${lang === "ko" ? "예비" : "Reserve"}</i>`
+      : "";
+  return `<div class="spec ${confirmed ? "selected" : ""} ${reserved ? "reserve" : ""} ${queued ? "queued" : ""}" role="button" tabindex="0" data-cell="${S.indexOf(s)}" style="--class:${s.color}" aria-pressed="${confirmed || reserved}"><div class="spec-main"><div class="spec-title">${displayClass(s)} · ${displaySpec(s)}</div><div class="spec-en">${
+    lang === "ko" ? `${s.spec} · ${s.class}` : `${s.specKo} · ${s.classKo}`
+  }</div>${reserveTag}</div><span class="role ${s.role}">${role(s.role)}</span></div>`;
+}
+
+function specCompactHtml(arr) {
+  const groups = [];
+  for (const s of arr) {
+    let group = groups.find((g) => g.className === s.class);
+    if (!group) {
+      group = { className: s.class, color: s.color, specs: [] };
+      groups.push(group);
+    }
+    group.specs.push(s);
+  }
+  groups.sort((a, b) => {
+    const ar = CLASS_ORDER.indexOf(a.className);
+    const br = CLASS_ORDER.indexOf(b.className);
+    return (ar < 0 ? 999 : ar) - (br < 0 ? 999 : br);
+  });
+  return groups
+    .map((group) => {
+      const chips = group.specs
+        .map((s) => {
+          const { confirmed, reserved, queued } = specPickState(s);
+          return `<button type="button" class="spec-chip ${confirmed ? "selected" : ""} ${reserved ? "reserve" : ""} ${queued ? "queued" : ""}" data-cell="${S.indexOf(s)}" style="--class:${s.color}" aria-pressed="${confirmed || reserved}">${displaySpec(s)}</button>`;
+        })
+        .join("");
+      return `<div class="spec-row" style="--class:${group.color}"><div class="spec-row-name">${displayClassName(group.className)}</div><div class="spec-row-specs">${chips}</div></div>`;
+    })
+    .join("");
+}
+
+function bindSpecCells() {
+  document.querySelectorAll("#specList [data-cell]").forEach((c) => {
     const act = () => {
       const spec = S[+c.dataset.cell];
       if (aiRecOpen) addApplicant(spec);
@@ -1704,12 +1738,33 @@ function renderSpecs() {
       cycleSpecReserve(S[+c.dataset.cell]);
     };
     c.onkeydown = (e) => {
+      if (c.tagName === "BUTTON") return;
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         act();
       }
     };
   });
+}
+
+function refreshSpecCompactBtn() {
+  const btn = $("specCompact");
+  if (!btn) return;
+  btn.classList.toggle("on", specCompact);
+  btn.setAttribute("aria-pressed", specCompact ? "true" : "false");
+  btn.title = lang === "ko" ? "한 줄에 한 직업씩 모아서 봅니다." : "Show one class per line.";
+}
+
+function renderSpecs() {
+  const arr = visibleSpecs();
+  const list = $("specList");
+  list.classList.toggle("compact", specCompact);
+  const empty = `<div class="empty">${
+    lang === "ko" ? "조건에 맞는 전문화가 없습니다." : "No matching specialization."
+  }</div>`;
+  list.innerHTML = arr.length ? (specCompact ? specCompactHtml(arr) : arr.map(specCellHtml).join("")) : empty;
+  bindSpecCells();
+  refreshSpecCompactBtn();
 }
 
 function cycleSpecReserve(spec) {
@@ -1922,6 +1977,7 @@ function saveHelperState() {
         size: +sizeEl.value,
         wantTwoDk,
         wantTwoWl,
+        specCompact,
         members: roster.map((s) => ({
           class: s.class,
           spec: s.spec,
@@ -1940,12 +1996,14 @@ function loadHelperState() {
   } catch (_) {
     return;
   }
-  if (!data || !Array.isArray(data.members)) return;
+  if (!data || typeof data !== "object") return;
   const sizeEl = $("raidSize");
   const size = String(data.size || 20);
   if (sizeEl && [...sizeEl.options].some((o) => o.value === size)) sizeEl.value = size;
   wantTwoDk = !!data.wantTwoDk;
   wantTwoWl = !!data.wantTwoWl;
+  specCompact = !!data.specCompact;
+  if (!Array.isArray(data.members)) return;
   roster = [];
   instanceSeq = 0;
   const cap = +(sizeEl?.value || 20);
@@ -2225,6 +2283,11 @@ $("clear").onclick = () => {
   applicants = [];
   renderAll();
 };
+$("specCompact")?.addEventListener("click", () => {
+  specCompact = !specCompact;
+  renderSpecs();
+  saveHelperState();
+});
 
 loadHelperState();
 helperPersistReady = true;

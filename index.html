@@ -21,7 +21,7 @@
       document.head.appendChild(base);
     })();
   </script>
-  <link rel="stylesheet" href="css/styles.css?v=20261114a">
+  <link rel="stylesheet" href="css/styles.css?v=20261114c">
 </head>
 <body>
   <div class="app is-home">
@@ -134,7 +134,10 @@
     <main id="helperView" class="hidden">
       <div class="layout">
         <section class="panel">
-          <h2 data-i18n="specTitle"></h2>
+          <div class="spec-head">
+            <h2 data-i18n="specTitle"></h2>
+            <button type="button" id="specCompact" class="ghost spec-compact-btn" data-i18n="specCompact" aria-pressed="false"></button>
+          </div>
           <div class="sub" data-i18n="specSub"></div>
           <div class="toolbar">
             <input id="search" class="search" data-i18n-placeholder="search">
@@ -249,7 +252,7 @@
   <script src="js/raid-store.js?v=20261011c"></script>
   <script src="js/planner.js?v=20261019d"></script>
   <script src="js/community.js?v=20261011c"></script>
-  <script src="js/app.js?v=20261114b"></script>
+  <script src="js/app.js?v=20261114c"></script>
   <script src="js/auth.js?v=20261011c"></script>
   <script src="js/theme.js?v=20261011c"></script>
 </body>
