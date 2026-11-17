@@ -1957,6 +1957,11 @@ body:has(.app.is-home)::after{
 .mw-bubble{max-width:168px;margin-bottom:4px;background:#fff;color:#2a2118;border:2px solid #241810;border-radius:12px;padding:5px 8px;font-size:12px;font-weight:800;text-align:center;position:relative}
 .mw-bubble:after{content:"";position:absolute;left:50%;bottom:-8px;margin-left:-6px;border:6px solid transparent;border-top-color:#241810}
 .mw-chibi{position:relative;width:72px;height:108px;transform:scale(calc(var(--fit,1) * var(--race,1))) scaleX(var(--face,1));transform-origin:bottom center}
+.mw-chibi.is-sheet{width:112px;height:110px;background:url("../assets/plaza/orc-walk.webp") 0 0 / 2688px 110px no-repeat}
+.mw-chibi.is-sheet>*:not(.mw-shadow){display:none}
+.mw-chibi.is-sheet .mw-shadow{left:50%;width:64px;margin-left:-32px}
+.mw-actor.is-walk .mw-chibi.is-sheet{animation:mw-orc-walk 1.2s steps(24) infinite}
+@keyframes mw-orc-walk{to{background-position:-2688px 0}}
 .mw-shadow{position:absolute;left:16px;bottom:2px;width:40px;height:8px;border-radius:50%;background:#0003;z-index:0}
 .mw-actor.is-air .mw-shadow{transform:scale(.65);opacity:.55}
 .mw-hair-back{position:absolute;z-index:0;pointer-events:none}
@@ -2089,7 +2094,7 @@ body:has(.app.is-home)::after{
   .mw-stage{min-height:340px;height:70vw}
 }
 @media(prefers-reduced-motion:reduce){
-  .mw-actor.is-walk .mw-legs span,.mw-actor.is-walk .mw-arms span,.mw-cloud,.mw-eye{animation:none}
+  .mw-actor.is-walk .mw-legs span,.mw-actor.is-walk .mw-arms span,.mw-actor.is-walk .mw-chibi.is-sheet,.mw-cloud,.mw-eye{animation:none}
 }
 
 /* parchment board — inven list, mailbox scroll */

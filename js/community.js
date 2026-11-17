@@ -263,7 +263,8 @@
 
   function chibi(ch) {
     const c = lookOf(ch);
-    return `<div class="mw-chibi race-${c.race} hair-${c.hair} hat-${c.hat}" style="--hair:${c.hairColor};--skin:${c.skin};--cloth:${c.cloth};--cloth2:${c.cloth2};--eye:${c.eye}">
+    const sheet = c.race === "orc" ? " is-sheet" : "";
+    return `<div class="mw-chibi${sheet} race-${c.race} hair-${c.hair} hat-${c.hat}" style="--hair:${c.hairColor};--skin:${c.skin};--cloth:${c.cloth};--cloth2:${c.cloth2};--eye:${c.eye}">
       <span class="mw-hair-back"></span>
       <span class="mw-shadow"></span>
       <div class="mw-legs"><span></span><span></span></div>
