@@ -25,6 +25,7 @@
  *   heroic: { duration, phases, majorSpellIds, events } 영웅 전용 타임라인
  *
  * 신화/영웅 스킬·페이즈 기본값은 Viserio 공식 타임라인 + WCL 페이즈 투표.
+ * Viserio가 페이즈를 안 나누는 넴(스조라크, 울라텍 등)은 phases: [].
  * 시즌 업데이트 때도 이 방식 유지. 절차는 scripts/README.md
  *   dump tmp-viserio[ -heroic]/ → fetch-spell-names-ko → derive-phase-starts[--heroic] → import-viserio-timelines[--heroic]
  * WCL 적 Casts(fetch-heroic-timelines.mjs)로 영웅을 채우지 않는다.
@@ -1345,12 +1346,8 @@
       name: "Sszorak",
       nameKo: "스조라크",
       duration: 420,
-      /** 이 타임라인 기준 페이즈 전환 (id = WCL 페이즈 번호) */
-      phases: [
-        { t: 100, id: 2 }, { t: 125, id: 1 },
-        { t: 227, id: 2 }, { t: 251, id: 1 },
-        { t: 354, id: 2 }, { t: 379, id: 1 },
-      ],
+      /** WCL은 버티기를 페이즈로 찍지만 시각이 고정이다. Viserio/NSRT처럼 나누지 않는다. */
+      phases: [],
       iconUrl: bossIcon("brute"),
       /**
        * Mythic: Viserio bossTimeline
@@ -1404,7 +1401,7 @@
       ],
       heroic: {
         duration: 480,
-        phases: [{ t: 111, id: 2 }, { t: 136, id: 1 }],
+        phases: [],
         /**
          * Heroic: Viserio bossTimeline (official HC template)
          * majors = Raid AOE / Raid Damage → (none)
@@ -1915,8 +1912,8 @@
       name: "Ula'tek",
       nameKo: "울라텍",
       duration: 630,
-      /** 이 타임라인 기준 페이즈 전환 (id = WCL 페이즈 번호) */
-      phases: [{ t: 175, id: 2 }, { t: 321, id: 3 }, { t: 372, id: 4 }],
+      /** WCL 전환 시각이 거의 고정이고 Viserio/NSRT는 페이즈를 나누지 않는다. */
+      phases: [],
       iconUrl: bossIcon("ulatek"),
       /**
        * Mythic: Viserio bossTimeline
@@ -2005,7 +2002,7 @@
       ],
       heroic: {
         duration: 630,
-        phases: [{ t: 164, id: 2 }, { t: 310, id: 3 }, { t: 362, id: 4 }],
+        phases: [],
         /**
          * Heroic: Viserio bossTimeline (official HC template)
          * majors = Raid AOE / Raid Damage → Spectral Coils · Mephitic Thrash · Rage of the Shackled · Blight Vein · Volatile Purge · Circling Prey
