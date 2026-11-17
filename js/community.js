@@ -1007,16 +1007,14 @@
     return !likelySignedIn();
   }
 
-  function showWalk(opts) {
-    const skipSalon = opts && opts.skipSalon;
+  function showWalk() {
     setShellMode("walk");
     currentBoard = null;
     currentKind = "";
     uiOpen = false;
     if (salon) salon.hidden = true;
     requestAnimationFrame(() => layoutPlaza());
-    if (!skipSalon && !state.entered && authUser()) openSalon(true);
-    else welcome();
+    welcome();
     if (!running) {
       running = true;
       last = performance.now();
@@ -1044,15 +1042,9 @@
     lastPlazaRoute = route || { view: "plaza", walk: true };
     if (!lastPlazaRoute.board && !lastPlazaRoute.gate) lastPlazaRoute.walk = true;
     if (!built) return;
-    if (needsPlazaGate()) {
-      if (lastPlazaRoute.walk) showWalk({ skipSalon: true });
-      else pause();
-      showLoginGate();
-      return;
-    }
     hideLoginGate();
     if (lastPlazaRoute.walk) {
-      showWalk({ skipSalon: !authUser() });
+      showWalk();
       return;
     }
     pause();
@@ -2988,15 +2980,9 @@
     });
     document.addEventListener("raid:auth", () => {
       refreshMailBadge();
-      const host = document.getElementById("communityView");
-      const onPlaza = host && !host.classList.contains("hidden");
       if (authUser() && gateEl && !gateEl.hidden) {
         hideLoginGate();
         openRoute(lastPlazaRoute);
-        return;
-      }
-      if (onPlaza && !authUser() && needsPlazaGate()) {
-        showLoginGate();
         return;
       }
       if (!room || room.hidden || !currentBoard) return;
