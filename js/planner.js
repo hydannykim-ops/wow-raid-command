@@ -2597,7 +2597,6 @@
           </div>
         </header>
         <div class="rp-banner" id="rpBanner"></div>
-        <div id="rpNsrtWarn" hidden></div>
         <div id="rpCd" class="rp-tool"></div>
         <div id="rpBoard" class="rp-tool hidden"></div>
       </div>`;
@@ -3139,8 +3138,7 @@
       return;
     }
     if (act === "nsrt-nick-warn") {
-      const first = nsrtNicklessGroups()[0]?.[0];
-      if (!rosterOpen) openRosterModal();
+      const first = nsrtNicklessGroups(rosterOpen ? editRoster : activeRoster())[0]?.[0];
       if (first) {
         selectedPlayerId = first.playerId;
         rosterEditId = first.playerId;
@@ -3865,7 +3863,6 @@
     const root = document.getElementById("plannerView");
     if (!root) return;
     ensureShell(false);
-    renderNsrtClassWarn();
     $("#rpTitle", root).textContent = shareReadonly
       ? t("오더 그림판 · 열람", "Order Board · View")
       : t("레이드 플래너", "Raid Planner");
@@ -4154,6 +4151,7 @@
               <button type="button" class="primary rp-roster-collapse" data-rp="toggle-roster">${t("닫고 작업하기", "Close & work")}</button>
             </div>
           </div>
+          ${nsrtClassWarnHtml(roster)}
           ${renderRaidLibrary()}
           <p class="rp-roster-draft-note${rosterDirty ? " dirty" : ""}">${t(
             "구성원을 넣고 빼도 저장을 눌러야 타임라인에 반영됩니다.",
@@ -5078,30 +5076,23 @@
     </div>`;
   }
 
-  function nsrtNicklessGroups() {
+  function nsrtNicklessGroups(list) {
     const groups = new Map();
-    activeRoster().forEach((m) => {
+    (list || []).forEach((m) => {
       if (memberNick(m)) return;
       if (!groups.has(m.class)) groups.set(m.class, []);
       groups.get(m.class).push(m);
     });
-    return [...groups.values()].filter((list) => list.length > 1);
+    return [...groups.values()].filter((group) => group.length > 1);
   }
 
-  function renderNsrtClassWarn() {
-    const el = document.getElementById("rpNsrtWarn");
-    if (!el) return;
-    const groups = shareReadonly ? [] : nsrtNicklessGroups();
-    if (!groups.length) {
-      el.innerHTML = "";
-      el.hidden = true;
-      return;
-    }
+  function nsrtClassWarnHtml(list) {
+    const groups = nsrtNicklessGroups(list);
+    if (!groups.length) return "";
     const names = groups
-      .map((list) => (langRef() === "ko" ? list[0].classKo || classShort(list[0].class) : list[0].class))
+      .map((group) => (langRef() === "ko" ? group[0].classKo || classShort(group[0].class) : group[0].class))
       .join(", ");
-    el.hidden = false;
-    el.innerHTML = `<button type="button" class="rp-nsrt-warn" data-rp="nsrt-nick-warn">${t(
+    return `<button type="button" class="rp-nsrt-warn" data-rp="nsrt-nick-warn">${t(
       `같은 직업이 여러 명인 클래스는 NSRT가 작동하지 않을 수 있습니다. 클릭해서 닉네임을 넣어 주세요. · ${names}`,
       `NSRT may not work when several players share a class. Click to enter nicknames. · ${names}`
     )}</button>`;
@@ -5198,7 +5189,6 @@
     }
     refreshWowheadTips();
     applyFitZoomAfterLayout();
-    renderNsrtClassWarn();
   }
 
   function roleLabel(r) {
