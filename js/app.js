@@ -85,7 +85,7 @@ const T = {
     gameSoonBadge: "준비중",
     gameSoon: "구인 게임을 준비하고 있습니다.",
     plazaTab: "커뮤니티",
-    plazaDesc: "광장과 게시판은 아직 열리지 않았습니다.",
+    plazaDesc: "오그리마 광장을 오크로 걸어다닙니다.",
     plazaSoonBadge: "준비중",
     plazaSoon: "오그리마 광장과 게시판을 준비하고 있습니다.",
     plazaTitle: "커뮤니티",
@@ -139,7 +139,7 @@ const T = {
     gameSoonBadge: "Soon",
     gameSoon: "The recruiting game is not open yet.",
     plazaTab: "Community",
-    plazaDesc: "The plaza and boards are still closed.",
+    plazaDesc: "Walk Orgrimmar as an orc.",
     plazaSoonBadge: "Soon",
     plazaSoon: "The plaza and boards are not open yet.",
     plazaTitle: "Community",
@@ -1601,7 +1601,7 @@ function renderProviderRow(syn, isOn) {
 
 let currentView = "home";
 let currentRoute = { view: "home" };
-const COMMUNITY_READY = false;
+const COMMUNITY_READY = true;
 const GAME_READY = false;
 const PLAZA_BOARDS = ["info", "recruit", "seek", "free"];
 const PLAZA_KINDS = ["regular", "pickup"];
