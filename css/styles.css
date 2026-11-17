@@ -2320,6 +2320,9 @@ body::before{opacity:.08}
   background:transparent;
   color:var(--muted);
 }
+#rpNsrtWarn[hidden]{display:none}
+.rp-nsrt-warn{display:block;width:100%;text-align:left;cursor:pointer;font-size:13px;font-weight:800;line-height:1.45;padding:10px 12px;border-radius:10px;border:1px solid #6a5420;background:#2a2212;color:var(--gold)}
+.rp-nsrt-warn:hover{filter:brightness(1.08)}
 .rp-main.panel{
   background:color-mix(in srgb,var(--panel) 94%,transparent);
   box-shadow:none;

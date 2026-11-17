@@ -2597,6 +2597,7 @@
           </div>
         </header>
         <div class="rp-banner" id="rpBanner"></div>
+        <div id="rpNsrtWarn" hidden></div>
         <div id="rpCd" class="rp-tool"></div>
         <div id="rpBoard" class="rp-tool hidden"></div>
       </div>`;
@@ -3134,6 +3135,16 @@
     if (act === "roster-close-cancel" || act === "roster-close-backdrop") {
       if (act === "roster-close-backdrop" && e.target.dataset.rp !== "roster-close-backdrop") return;
       rosterClosePrompt = false;
+      renderCd();
+      return;
+    }
+    if (act === "nsrt-nick-warn") {
+      const first = nsrtNicklessGroups()[0]?.[0];
+      if (!rosterOpen) openRosterModal();
+      if (first) {
+        selectedPlayerId = first.playerId;
+        rosterEditId = first.playerId;
+      }
       renderCd();
       return;
     }
@@ -3854,6 +3865,7 @@
     const root = document.getElementById("plannerView");
     if (!root) return;
     ensureShell(false);
+    renderNsrtClassWarn();
     $("#rpTitle", root).textContent = shareReadonly
       ? t("오더 그림판 · 열람", "Order Board · View")
       : t("레이드 플래너", "Raid Planner");
@@ -5066,6 +5078,35 @@
     </div>`;
   }
 
+  function nsrtNicklessGroups() {
+    const groups = new Map();
+    activeRoster().forEach((m) => {
+      if (memberNick(m)) return;
+      if (!groups.has(m.class)) groups.set(m.class, []);
+      groups.get(m.class).push(m);
+    });
+    return [...groups.values()].filter((list) => list.length > 1);
+  }
+
+  function renderNsrtClassWarn() {
+    const el = document.getElementById("rpNsrtWarn");
+    if (!el) return;
+    const groups = shareReadonly ? [] : nsrtNicklessGroups();
+    if (!groups.length) {
+      el.innerHTML = "";
+      el.hidden = true;
+      return;
+    }
+    const names = groups
+      .map((list) => (langRef() === "ko" ? list[0].classKo || classShort(list[0].class) : list[0].class))
+      .join(", ");
+    el.hidden = false;
+    el.innerHTML = `<button type="button" class="rp-nsrt-warn" data-rp="nsrt-nick-warn">${t(
+      `같은 직업이 여러 명인 클래스는 NSRT가 작동하지 않을 수 있습니다. 클릭해서 닉네임을 넣어 주세요. · ${names}`,
+      `NSRT may not work when several players share a class. Click to enter nicknames. · ${names}`
+    )}</button>`;
+  }
+
   function renderCd() {
     const box = document.getElementById("rpCd");
     if (!box) return;
@@ -5157,6 +5198,7 @@
     }
     refreshWowheadTips();
     applyFitZoomAfterLayout();
+    renderNsrtClassWarn();
   }
 
   function roleLabel(r) {
