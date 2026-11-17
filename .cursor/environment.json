@@ -1,0 +1,11 @@
+{
+  "name": "wow-raid-command",
+  "install": "npx --yes wrangler@4 --version",
+  "start": "bash .cursor/start.sh",
+  "ports": [
+    {
+      "name": "pages",
+      "port": 8788
+    }
+  ]
+}
