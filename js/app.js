@@ -71,7 +71,6 @@ const T = {
     homeSub: "",
     contactNote: "문의와 건의는",
     enter: "열기",
-    backHome: "지휘실로",
     settingsLabel: "설정",
     langLabel: "언어",
     factionLabel: "진영",
@@ -125,7 +124,6 @@ const T = {
     homeSub: "",
     contactNote: "Questions and ideas",
     enter: "Open",
-    backHome: "Command room",
     settingsLabel: "Settings",
     langLabel: "Language",
     factionLabel: "Faction",
@@ -1640,8 +1638,6 @@ function applyI18n() {
   }
   $("langBtn").textContent = lang === "ko" ? "EN" : "한글";
   $("patch").textContent = DATA.raid.targetPatch;
-  const back = $("backHome");
-  if (back) back.setAttribute("title", tr("backHome"));
   renderAll();
 }
 
@@ -2155,7 +2151,6 @@ function goToRoute(route, opts) {
   document.querySelector(".app")?.classList.toggle("mw-open", onWalk);
   document.querySelector(".app")?.classList.toggle("mw-board", !!onBoard);
   if (currentView !== "planner") document.querySelector(".app")?.classList.remove("rp-fit-board");
-  $("backHome")?.classList.toggle("hidden", currentView === "home");
   applyI18n();
   if (GAME_READY && currentView === "game" && window.RaidGameUI) {
     RaidGameUI.mount(() => lang);

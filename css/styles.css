@@ -1543,21 +1543,6 @@ html[data-theme="alliance"] .crest{
 }
 .app:not(.is-home) #brandHome{cursor:pointer}
 .brand-copy{display:flex;flex-direction:column;align-items:flex-start;min-width:0;text-align:left}
-.back-btn{
-  width:32px;
-  height:32px;
-  border-radius:8px;
-  display:grid;
-  place-items:center;
-  background:var(--ink);
-  border:1px solid var(--line);
-  color:var(--text);
-  font-size:16px;
-  flex:none;
-}
-.app.is-home .back-btn,
-.back-btn.hidden{display:none}
-
 .top-utils{margin-left:auto;position:relative;display:flex;align-items:center;gap:10px}
 .settings-wrap{position:relative}
 .settings-btn{
