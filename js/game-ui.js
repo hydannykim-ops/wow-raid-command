@@ -1285,13 +1285,11 @@
           const on = !!buffs.covered[syn.id];
           const effect = langRef() === "ko" ? syn.effectKo : syn.effect;
           const name = langRef() === "ko" ? syn.nameKo : syn.name;
-          const nameAlt = langRef() === "ko" ? syn.name : syn.nameKo;
           const prov = langRef() === "ko" ? syn.providerKo : (syn.providers || []).join(", ");
           return `<div class="synergy ${on ? "covered" : "inactive"}" style="--class:${syn.color || "#69b0ff"}">
             <div class="syn-head">
               <div class="syn-title-wrap">
                 <div class="syn-name">${name}</div>
-                <div class="syn-en">${nameAlt}</div>
               </div>
               <span class="syn-badge">${on ? t("활성", "ACTIVE") : t("미활성", "OFF")}</span>
             </div>

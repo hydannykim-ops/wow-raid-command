@@ -1788,11 +1788,11 @@ function renderColumns() {
         ? list
             .map(
               (s) =>
-                `<div class="slot${s.reserve ? " reserve" : ""}" role="button" tabindex="0" data-instance="${s.instanceId}" style="--class:${s.color}"><b>${displayClass(s)} · ${displaySpec(s)}</b><span>${
-                  lang === "ko"
-                    ? `${s.spec} / ${s.class}`
-                    : `${s.specKo} / ${s.classKo}`
-                }${s.reserve ? `<i class="reserve-tag">${lang === "ko" ? "예비" : "Reserve"}</i>` : ""}</span></div>`
+                `<div class="slot${s.reserve ? " reserve" : ""}" role="button" tabindex="0" data-instance="${s.instanceId}" style="--class:${s.color}"><b>${displayClass(s)} · ${displaySpec(s)}</b>${
+                  s.reserve
+                    ? `<span><i class="reserve-tag">${lang === "ko" ? "예비" : "Reserve"}</i></span>`
+                    : ""
+                }</div>`
             )
             .join("")
         : `<div class="empty">${lang === "ko" ? "아직 없음" : "Empty"}</div>`
@@ -1841,7 +1841,6 @@ function renderSynergies() {
         <div class="syn-head">
           <div class="syn-title-wrap">
             <div class="syn-name">${lang === "ko" ? x.nameKo : x.name}</div>
-            <div class="syn-en">${lang === "ko" ? x.name : x.nameKo}</div>
           </div>
           <span class="syn-badge">${isOn ? (lang === "ko" ? "활성" : "ACTIVE") : lang === "ko" ? "미활성" : "OFF"}</span>
         </div>
